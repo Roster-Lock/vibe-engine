@@ -1,0 +1,135 @@
+# ---------------------------------------------------------------------
+# The hero kits — the file a creator actually edits.
+#
+# Every sentence below compiles to the IR in src/ir.ts, and from there
+# two ways: the interpreter in src/english/runtime.ts runs it directly,
+# and src/english/codegen.ts prints it as the TypeScript committed in
+# src/generated/abilities.gen.ts. Both run the same battle.
+#
+# Nothing in this file names a class, a function or an id.
+# ---------------------------------------------------------------------
+
+# ----------------------------- Mountain King -------------------------
+
+Ability Storm Bolt
+Targeting: target enemy unit
+Cooldown 7 seconds
+Cost 75 mana
+Range 600
+Deal 180 damage to the target and add Stunned to the target.
+
+Ability Thunder Clap
+Targeting: no target
+Cooldown 9 seconds
+Cost 75 mana
+Deal 100 damage to all enemy units within 300 range of this unit.
+Add Slowed to all enemy units within 300 range of this unit.
+
+Ability Avatar
+Targeting: no target
+Cooldown 30 seconds
+Cost 125 mana
+Add Avatar Form to this unit.
+
+# ----------------------------- Shadow Hunter -------------------------
+
+Ability Healing Wave
+Targeting: target ally unit
+Cooldown 6 seconds
+Cost 65 mana
+Range 700
+Heal the target for 215.
+
+Ability Rejuvenation
+Targeting: target ally unit
+Cooldown 8 seconds
+Cost 65 mana
+Range 700
+Add Rejuvenating to the target.
+
+Ability Carrion Swarm
+Targeting: target point
+Cooldown 9 seconds
+Cost 110 mana
+Range 700
+Deal 90 damage to all enemy units within 220 range of the target point.
+
+Ability Raise Dead
+Targeting: no target
+Cooldown 22 seconds
+Cost 95 mana
+Summon 2 Skeleton Warrior near this unit.
+
+# ------------------------------- passives ----------------------------
+
+# A passive has no Targeting and no cost — it is only its trigger.
+Ability Cleave
+Whenever this unit attacks, deal damage equal to 30% of this unit's attack damage to all enemy units within 150 range of the victim.
+
+Ability Thorns Aura
+Whenever this unit takes damage, deal 25 damage to the attacker.
+
+Ability Envenomed Spears
+Whenever this unit attacks, add Poisoned to the victim.
+
+# A finishing blow: only fires on a kill, and only heals what is hurt.
+Ability Feast
+Whenever this unit kills a unit, heal all ally units within 400 range of this unit with hp below 60% for 60.
+
+# -------------------------- demonstration only -----------------------
+# Not in any unit's kit; here to show the rest of the grammar.
+
+Ability Blink
+Targeting: target point
+Cooldown 10 seconds
+Cost 40 mana
+Range 700
+Teleport this unit to the target point.
+
+Ability War Stomp
+Targeting: no target
+Cooldown 12 seconds
+Cost 90 mana
+Push all enemy units within 250 range of this unit back 130 units.
+Add Stunned to all enemy units within 250 range of this unit.
+
+Ability Execute
+Targeting: target enemy unit
+Cooldown 15 seconds
+Cost 50 mana
+Range 500
+Kill the target with hp below 15%.
+
+Ability Delayed Blast
+Targeting: target point
+Cooldown 14 seconds
+Cost 80 mana
+Range 700
+After 2 seconds, deal 260 damage to all enemy units within 180 range of the target point.
+
+# --------------------------------- buffs -----------------------------
+
+Buff Stunned
+Duration 3 seconds
+Cannot move.
+Cannot attack.
+Cannot cast.
+
+Buff Slowed
+Duration 6 seconds
+Reduce movement speed by 50%.
+Reduce attack speed by 25%.
+
+Buff Poisoned (stacks)
+Duration 8 seconds
+Every 1 second, deal 4 damage to this unit.
+
+Buff Rejuvenating
+Duration 12 seconds
+Every 1 second, heal this unit for 22.
+
+Buff Avatar Form
+Duration 15 seconds
+Increase attack damage by 20.
+Increase armor by 5.
+Reduce movement speed by 15%.
