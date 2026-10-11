@@ -1,0 +1,117 @@
+node_modules
+hidden
+hidden.*
+dist
+temp
+tmp
+.awcache
+.wrangler
+.pnpm-store
+.env
+.qodo
+
+# example.ts.swp & example.txt~ are temporary backup files created by the Vim and nano text editors respectively
+.swp
+*~
+*.db
+
+# Output file of git diff > diff.txt used as input for AI to write git commit -m "X" messages output which is saved into commit.txt
+diff.txt
+commit.txt
+
+jest-output.txt
+errorLogs.log
+watch/target/
+install-log*
+
+# Pythagora
+.pythagora/
+
+# OSX
+.DS_Store
+
+# Xcode
+#
+build/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+xcuserdata
+*.xccheckout
+*.moved-aside
+DerivedData
+*.hmap
+*.ipa
+*.xcuserstate
+
+# Android/IntelliJ
+#
+build/
+.idea
+.gradle
+local.properties
+*.iml
+*.hprof
+
+# node.js
+#
+node_modules/
+npm-debug.log
+yarn-error.log
+.pnpm-store
+
+# TypeScript
+*.tsbuildinfo
+
+# BUCK
+buck-out/
+\.buckd/
+*.keystore
+!debug.keystore
+
+# fastlane
+#
+# It is recommended to not store the screenshots in the git repo. Instead, use fastlane to re-generate the
+# screenshots whenever they are needed.
+# For more information about the recommended setup visit:
+# https://docs.fastlane.tools/best-practices/source-control/
+
+*/fastlane/report.xml
+*/fastlane/Preview.html
+*/fastlane/screenshots
+
+# Bundle artifact
+*.jsbundle
+
+# CocoaPods
+**/ios/Pods/
+
+
+## Rust
+watch/target
+
+
+# Hidden
+**/hidden.*
+**/hidden*
+**/secret.*
+**/secrer*
+
+# Dist should only be on the compiled branch
+**/dist
+**/dev-dist
+
+.early.coverage
+
+# Local runtime save-data from running the game engine (not source)
+/save/
+
+# Playwright's own generated run output (traces, screenshots, HTML reports)
+test-results/
+playwright-report/
+blob-report/

@@ -1,0 +1,69 @@
+{
+  "name": "tinyquest",
+  "version": "0.1.0",
+  "description": "A tiny, content-creator-friendly game engine for new players, written in TypeScript.",
+  "type": "module",
+  "main": "./dist/engine/index.js",
+  "types": "./dist/engine/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/engine/index.d.ts",
+      "import": "./dist/engine/index.js"
+    },
+    "./contracts": {
+      "types": "./dist/engine/contracts.d.ts",
+      "import": "./dist/engine/contracts.js"
+    }
+  },
+  "files": [
+    "dist/engine",
+    "src/engine"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "example": "tsx src/examples/quickstart.ts",
+    "example:game": "tsx src/examples/game.ts",
+    "example:ai": "tsx src/examples/ai-battle.ts",
+    "example:aura": "tsx src/examples/aura.ts",
+    "example:explosion": "tsx src/examples/explosion.ts",
+    "example:max": "tsx src/examples/max-modifier.ts",
+    "example:stat": "tsx src/examples/derived-stats.ts",
+    "example:transform": "tsx src/examples/transform.ts",
+    "example:destroy": "tsx src/examples/08-28-2026/demo.ts",
+    "ai:vs": "node --import tsx --import ./src/games/turn-based/svg-loader.mjs test/ai-vs-ai.ts",
+    "ui:dev": "vite src/ui",
+    "ui:build": "vite build src/ui",
+    "example:stamina": "tsx src/examples/stamina.ts",
+    "example:execution": "tsx src/examples/execution.ts",
+    "rts:demo": "tsx examples/rts/src/demo.ts",
+    "rts:codegen": "tsx examples/rts/scripts/generate.ts",
+    "rts:test": "vitest run examples/rts"
+  },
+  "keywords": [
+    "game",
+    "engine",
+    "rpg",
+    "content",
+    "typescript"
+  ],
+  "license": "JSON",
+  "devDependencies": {
+    "@types/node": "^26.3.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^4.7.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.21",
+    "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "katex": "^0.18.7",
+    "monaco-editor": "^0.56.0"
+  }
+}
