@@ -614,6 +614,52 @@ from the triggering entity's own declaration, so `takes damage` fires on
 `hp` for a fighter and on `loyalty` for something that declares that as
 its life. A loss on any *other* gauge is not damage and does not fire it.
 
+### Zone movement — `enters` / `leaves`
+
+The engine's **zones** are game data (`src/engine/zone.ts`,
+`docs/design/15-zones.md`): the engine ships `play` and `garbage`, and a
+game declares its own — a deck, a hand, a stack, the `active` slot a card
+resolves in. Movement between zones is one event (`zone:changed`, with an
+optional `from`), and the language names both ends:
+
+```
+when <count>? <subject> enters <zone> [from <zone>] then <effect>.
+when <count>? <subject> leaves <zone> [to <zone>]   then <effect>.
+```
+
+| Written | Matches |
+| --- | --- |
+| `enters play` | arriving in `play`, **whatever** it came from — including a first placement, which has no `from` |
+| `enters play from active` | arriving in `play` from `active` (a card that resolved normally) |
+| `enters play from stack` | arriving in `play` straight off the stack — a card cheated past resolution |
+| `leaves play` | leaving `play`, **whatever** the destination |
+| `leaves play to garbage` | leaving `play` for the garbage — what dying *is* |
+
+Without the `from`/`to`, the trigger fires no matter what the other end
+was; that is the game-agnostic half, and it is why "enters play" does not
+require a game to name its paths. An article is allowed
+(`enters a garbage`), and the plural verb forms (`enter`, `leave`) match
+the counted subjects.
+
+Zone names come from the **host**, exactly like buff names: the editor is
+handed a `ZoneDictionary` (`src/english/zone-dictionary.ts`) with the
+engine's zones always known, so `enters nowhere` is an `unknown-zone`
+diagnostic listing the ones that exist, and completion offers them after
+`enters`/`leaves` and after `from`/`to`.
+
+A zone phrase lowers to the engine's ordinary `zone:changed` trigger, so it
+needs no new event and composes with everything else a trigger does —
+counts, filters, `the source` (empty here: a move's cause is not in the
+event), and `:batch` gating.
+
+Two related readings are worth keeping distinct:
+
+- `when this dies` is `character:destroyed` — "destroyed by the rules".
+- `when this enters a garbage from play` is the same *mechanical* move,
+  expressed in zones. A discard from hand reaches the garbage without
+  dying, and a bounce leaves play without dying; the zone phrasing can say
+  all three precisely, while `dies` says only the first.
+
 ### `the source`
 
 Inside a trigger, `the source` is whoever caused the event: the character
@@ -666,6 +712,70 @@ Damaging an enemy makes it survive, which triggers again. The engine's
 depth guard stops it, but as an error — not a feature. Effects that write
 no gauge (`Add …`) cannot loop this way.
 
+## Card documents
+
+The same language has a second document kind for the card game: sections
+headed `Card <name>` instead of `Ability <name>`. A card is a cost, a body,
+and its effect lines:
+
+```
+Card Fireball
+Cost 4
+Spell
+Deal 6 damage to target enemy character.
+```
+
+```
+Card Elven Archer
+Cost 1
+Creature 1/1
+When this enters play then Deal 1 damage to target enemy character.
+```
+
+A card is a heading followed by **header lines** — `Cost <n>`, then exactly
+one of `Creature <power>/<health>` or `Spell` — and then its effect lines:
+
+| Line | Means |
+| --- | --- |
+| `Spell` + plain sentences | The spell's effect, exactly like an ability body. `target …` becomes the card's targeting; a sentence with no `target` phrase finds its own victims. |
+| `Creature <p>/<h>` | A minion's stat line. |
+| `Taunt.` / `Charge.` | A keyword. Creatures only. |
+| `When this enters play [from <zone>] then <effect>` | The creature's arrival effect. A **target-picking** effect is chosen as the card is played; one that picks nothing is a real zone trigger. |
+| `When this dies then <effect>` | A trigger on the creature's own destruction. |
+| `When … then …` | Any other standing trigger (`When this takes damage then …`, `When this enters a garbage from play then …`). |
+
+**Events are named, not nicknamed.** There is no `Battlecry:`/`Deathrattle:`
+shorthand: a card says *when* something happens with the same `When … then …`
+grammar an ability document uses. A document still using the old shorthand
+gets a targeted diagnostic naming the explicit sentence to write instead.
+
+**Arriving in play, precisely.** The card layer stages a creature in the
+`active` zone and *moves* it into `play`, so `When this enters play from
+active` is a real transition and not an assumption. What the arrival effect
+compiles to depends on one thing — whether it picks a target:
+
+- **It picks a target** (`… then Deal 1 damage to target enemy character.`):
+  the target is chosen by the player as the card is played, so this stays
+  the card's play-time effect and `from active` is a guard on it. An effect
+  written `from stack` therefore never fires on the normal cast — nothing
+  can cheat a target choice in yet.
+- **It picks nothing** (`… then Deal 2 damage to all enemy characters.`):
+  it compiles to an ordinary `zone:changed` trigger, so it fires however
+  the creature arrives — played, summoned, or cheated from the stack if
+  the effect demands `from stack`.
+
+`Buff` sections are still document-level and shared by every card, so a
+card's `Add <buff>` resolves against them.
+
+Compilation **delegates**: each effect line is compiled by the ordinary
+ability grammar, so a card's effect is a real engine `cast` ability with
+the same diagnostics and the same IR. `src/english/card.ts` owns only the
+card-shaped parts — the header lines, the sectioning, and a line map that
+moves the compiler's spans back onto the player's document (so a squiggle
+lands on the word that caused it, not on a synthetic line). Completion does
+the same: header lines offer card words, and every effect line is completed
+by `completeAt`.
+
 ## Diagnostics and completion
 
 - **Grammar errors** (unknown verb, missing `.`, a `number` where a phrase
@@ -683,9 +793,14 @@ no gauge (`Add …`) cannot loop this way.
 
 - `Change controller`, `summon`/creatures, gauge writes other than HP damage /
   healing, percentages, `unless`/`except` conditions, restrictions, costs,
-  zones (draw/discard/bounce), and action transformers. Transforms and
-  summons produce targeted diagnostics so the editor never guesses
-  silently.
+  and action transformers. Transforms and summons produce targeted
+  diagnostics so the editor never guesses silently.
+- **Zone movement as a verb.** `enters`/`leaves` *watch* a move; nothing in
+  the language yet *makes* one (no "move this to the garbage", "return
+  target character from the garbage"). The engine has `move` as an action
+  (`engine.moveTo`), so the remaining work is a sentence, not a mechanism.
 - Trigger gaps: non-character subjects (`buffs leave`, `gauges change`),
-  more event verbs (`takes damage`, `attacks`), several effects after one
-  `then`, and `you may` (an optional trigger).
+  more event verbs (`attacks`), several effects after one `then`, target
+  choice *inside* a trigger (a trigger's effect is auto-targeted, so
+  `then deal 1 damage to target enemy character` has nothing to pick), and
+  `you may` (an optional trigger).

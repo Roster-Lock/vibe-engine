@@ -31,7 +31,7 @@ type Action =
   | SummonAction       // type: 'summon'       — create a character in play (target model)
   | ControlAction      // type: 'control'      — swap a character's controller (target model)
   | TransformAction    // type: 'transform'    — push a form onto the transform stack (target model)
-  | ReviveAction       // type: 'revive'       — move graveyard → play (target model)
+  | ReviveAction       // type: 'revive'       — move garbage → play (target model)
   | PendingEffectAction// type: 'pendingEffect'— add/remove/cancel a pending effect (target model)
 
 interface ActionFields { source?: EventSource; direction?: ActionDirection }
@@ -148,9 +148,9 @@ interface PopTransformAction {
 
 interface ReviveAction {
   type: 'revive';
-  target: Character;              // must be in the graveyard (else: misuse, throw)
+  target: Character;              // must be in the garbage (else: misuse, throw)
   hp?: number;                    // spec default: full HP
-  // Moves graveyard → play, restores HP, emits `character:revived`.
+  // Moves garbage → play, restores HP, emits `character:revived`.
 }
 ```
 
@@ -303,7 +303,7 @@ The full settle sequence for one `apply`:
    b. **game-over check runs before any events** (`resolveGameEnd`) — a
       killing blow ends the game instead of triggering abilities;
    c. the **destroy phase** moves every pending destruction to the
-      graveyard simultaneously — HP ≤ 0 deaths from the batch, queued
+      garbage simultaneously — HP ≤ 0 deaths from the batch, queued
       `destroy` actions, and status-driven max-0 deaths ([09-sba-pass.md](09-sba-pass.md) §3);
    d. **content state-based rules** react to the settled state
       (loop-while-changed, depth-capped — [09-sba-pass.md](09-sba-pass.md) §4);

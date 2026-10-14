@@ -5,10 +5,10 @@
 ## Decisions
 
 - ✅ **Targeting pools draw from the play zone only.** Dead characters live
-  in the graveyard and are not in the pool — no per-spell "cannot target
+  in the garbage and are not in the pool — no per-spell "cannot target
   dead" checks, and the "fireball a corpse" problem dies by construction.
 - ✅ **Revive is the explicit exception**: a dedicated effect moves a
-  character graveyard → play (see 01-entities). If graveyard-scoped
+  character garbage → play (see 01-entities). If garbage-scoped
   abilities ever need it, a pattern-level `allowGraveyard` flag can be added
   — the zone abstraction keeps that door open without special-casing.
 - ✅ **Targetability is part of the "cannot be X if Y" restriction system**
@@ -28,14 +28,14 @@
 
 ## Open
 
-- 🔶 **Graveyard-scoped abilities** (reanimate from the graveyard, count dead
+- 🔶 **Graveyard-scoped abilities** (reanimate from the garbage, count dead
   characters) — future. The zone abstraction should stay queryable
-  (`engine.charactersIn('graveyard')`) so these are easy to add.
+  (`engine.charactersIn('garbage')`) so these are easy to add.
 
 ## Engine implications
 
 - `engine.ts`: `validTargets` filters to the play zone and gains a
   `canBeTargetedBy` gate after `include`; a hard rule filter with named
   overrides.
-- Zones: minimal `play` / `graveyard` containers owned by the engine;
+- Zones: minimal `play` / `garbage` containers owned by the engine;
   characters move between them on destroy / summon / revive.

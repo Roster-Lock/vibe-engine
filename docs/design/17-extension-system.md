@@ -413,7 +413,7 @@ game** layer.
 | HP-keyed runtimes: `GaugeWrite` collection and the `character:survived` check | [`engine.ts:2241`](../../src/engine/engine.ts#L2241), [`:2310-2314`](../../src/engine/engine.ts#L2310-L2314) |
 | `DEFAULT_SPEED`, `sortBySpeed`, `Game`, `Decision`, `startTurn`/`endTurn` | [`character.ts:31`](../../src/engine/character.ts#L31), [`game.ts:53-188`](../../src/engine/game.ts#L53-L188), [`engine.ts:743-753`](../../src/engine/engine.ts#L743-L753) |
 | ~~`win`/`lose`, `TeamRegistry`~~ **moved**; `isAlly`/`isEnemy`, `TargetWho`'s `'ally'`/`'enemy'` still here | [`actions.ts:142-164`](../../src/engine/actions.ts#L142-L164), [`teams.ts`](../../src/engine/teams.ts), [`ability/types.ts:14`](../../src/engine/ability/types.ts#L14) |
-| `PLAY`/`GRAVEYARD` as reserved ids; `isDeath`'s graveyard test | [`zone.ts:114-115`](../../src/engine/zone.ts#L114-L115), [`events.ts:463-470`](../../src/engine/events.ts#L463-L470) |
+| `PLAY`/`GARBAGE` as reserved ids; `isDeath`'s garbage test | [`zone.ts:114-115`](../../src/engine/zone.ts#L114-L115), [`events.ts:463-470`](../../src/engine/events.ts#L463-L470) |
 | ~~The `.svg` loader pair and the roster they serve~~ **moved** | now [`src/games/turn-based/`](../../src/games/turn-based/) (`svg-loader.mjs`, `svg-hooks.mjs`, `content/`) |
 
 **Damage is the interesting case.** It is not one concept. What a loss of value

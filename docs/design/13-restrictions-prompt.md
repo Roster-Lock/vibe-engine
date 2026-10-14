@@ -54,11 +54,11 @@ All under `src/engine/` (library entry `src/engine/index.ts`, tests in
   change this.
 - **Destroy model** (built): `destroy` action deferred to the SBA pass;
   "HP ≤ 0 ⇒ destroyed" is a state-based rule (HP is the life gauge); all pending destructions in a
-  settle land **simultaneously** into the **graveyard**; `character:destroyed`
+  settle land **simultaneously** into the **garbage**; `character:destroyed`
   carries a `reason` (`'hp:current-reached-minimum'` | `'hp:maximum-reached-0'`
   | `'direct-action'`); batch variants `character:destroyed:batch` /
   `character:survived:batch` exist. `Character.destroyed` flag; engine
-  `#graveyard`; targeting pools exclude the graveyard.
+  `#garbage`; targeting pools exclude the garbage.
 - **The SBA pass** (`engine.ts` `#applyGaugeBatch` + end-of-apply leftover):
   writes land (netted) → **win/lose first** (`TeamRegistry.resolveGameEnd`,
   throws `GameEndInterrupt`) → **destroy phase** (`#destroyPhase`, gated by

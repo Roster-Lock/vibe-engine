@@ -11,13 +11,13 @@ still open.
 
 > Decisions here **supersede the implementation where they conflict**. The
 > engine is a living prototype — the current code still has `character.team`,
-> no zones beyond play/graveyard — and these docs are the map for where it is
+> no zones beyond play/garbage — and these docs are the map for where it is
 > heading. The README's "Design decisions worth knowing" section describes the
 > engine *as built today*; these docs describe the target model.
 
 ## Implementation status
 
-- ✅ **Slice 1 (destroy core) built** — `destroy` action, graveyard zone,
+- ✅ **Slice 1 (destroy core) built** — `destroy` action, garbage zone,
   simultaneous batch destruction, `character:destroyed` event with a
   `reason`, win/lose-first ordering, corpse-proof targeting, `canDestroy`
   gate hook (always `true` until restrictions land). Tests:
@@ -65,7 +65,7 @@ still open.
 
 | Doc | Topic | Status |
 | --- | --- | --- |
-| [01-entities.md](01-entities.md) | Character model: owner/controller, dead state + graveyard, identity vs form, summon | ✅ direction; 🔶 revive details |
+| [01-entities.md](01-entities.md) | Character model: owner/controller, dead state + garbage, identity vs form, summon | ✅ direction; 🔶 revive details |
 | [02-destroy.md](02-destroy.md) | `destroy` action, HP→destroy rule, simultaneous destruction, game-end ordering | ✅ |
 | [03-win-lose.md](03-win-lose.md) | Teams on players, ownership-based defeat, `countsForDefeat`, countdown win/lose | ✅ |
 | [04-sba.md](04-sba.md) | State-based action framework + layer ordering | ✅ direction; 🔶 "gauge changes" layer |
@@ -81,12 +81,14 @@ still open.
 | [14-derived-stats.md](14-derived-stats.md) | Named stats derived from a base plus `stat` contributions — including **functions of the game state** ("toughness equals creatures you control"), and the world-state refresh schedule | ✅ built |
 | [15-zones.md](15-zones.md) | Entities, zones as data, `move` as an Action (destroy becomes a special case), temporary piles, the choice protocol, and where extended vocabulary plugs in | ✅ direction; 🔶 entity weight in hidden zones |
 | [17-extension-system.md](17-extension-system.md) | The extension system: open `GameEventMap`/`ActionMap` by declaration merging, the action registry, `ActionBase`, and what moves out of the core into a turn-based-combat layer | ✅ built — the engine names no game concept |
+| [18-english-and-blocks.md](18-english-and-blocks.md) | Two surfaces over one document: English text and Blockly blocks as views of the IR, and the round-trip invariants. Kept: `src/english/render.ts` (IR → English). Removed: the Blockly surface | ⏸ parked — the IR → English half is built and tested; Blockly was built, measured at 6–11× the English, and taken back out |
+| [19-glossary.md](19-glossary.md) | The glossary: term → definition, annotating a text run, and a panel — so any word in any surface is selectable. Registered keywords (named before executable), and `Discover` execution — the engine's reveal/attribute primitives, the action that asks mid-resolution, and the IR node | ✅ built (glossary + UI + keyword registration); ✅ `Discover` executes (engine + IR); 🔶 its English sentence and reveal UI |
 
 ## Deferred (parked, revisit later)
 
 - **Costs** — mana costs, taps, sacrifices as declared data. Explore after
   the action vocabulary settles.
-- ~~**Zones beyond play/graveyard** — no hand/deck/exile for now.~~
+- ~~**Zones beyond play/garbage** — no hand/deck/exile for now.~~
   **Un-deferred** — see [15-zones.md](15-zones.md): zones generalize into the
   core (declared as data), and `move` becomes an Action.
 - **Attack wrapper / per-hit events** — multi-action damage is enough; revisit
@@ -112,7 +114,7 @@ still open.
 4. **Damage** — math-only model, no resistance tables; armor = flat
    absorption per hit (see 06).
 5. **This pass** — teams move to players, ownership-based defeat,
-   `countsForDefeat`, graveyard zone, transform stack, SBA layer ordering
+   `countsForDefeat`, garbage zone, transform stack, SBA layer ordering
    (see 03/04/05/07).
 6. **The restrictions pass** — "cannot be X if Y" as the unified exception
    system (targeting, destroy, gauges, win/lose); content-registered SBAs

@@ -29,7 +29,7 @@ behavior of [03-actions.md](03-actions.md) §6). The pass then reads
 2. **Destroy / Creation** — every pending destruction (HP ≤ 0 unless a
    `destroy` restriction blocks it, summon timers at 0, queued `destroy`
    actions) happens **simultaneously**: all characters move to the
-   graveyard together, on-defeat buffs cleaned per `removedOnDefeat`, then
+   garbage together, on-defeat buffs cleaned per `removedOnDefeat`, then
    one `character:destroyed` event per character
    ([10-destroy.md](10-destroy.md)). Creations (summons landing) join here.
 3. **Gauge settling** — *automatic, not an explicit step*: gauges clamp on
@@ -142,14 +142,14 @@ Contract:
   while a hex is active never becomes the character's form; see
   [04-character-status.md](04-character-status.md) §6), so the pass step
   only maintains the tie set, the way the destroy phase maintains the
-  graveyard.
+  garbage.
 
 ## 6. Acceptance criteria (Slice 6)
 
 1. After a gauge batch, layer 1 (win/lose) runs before anything else: a
    killing blow throws `GameEndInterrupt` with no destroyed events and no
    queued triggers.
-2. Multiple pending destructions in one settle move to the graveyard
+2. Multiple pending destructions in one settle move to the garbage
    together; on-defeat buffs are cleaned before the events; each character
    gets one `character:destroyed` with its reason.
 3. A destroy-gated character (indestructible) at 0 HP is not destroyed and

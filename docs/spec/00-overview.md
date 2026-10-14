@@ -102,7 +102,7 @@ between the current code and the model this spec specifies:
 | --- | --- | --- |
 | Teams | `character.team` tag | Teams live on `Player`s. Ally/enemy derives from **controllers** + player team tags ([08](08-players-teams-winlose.md)). |
 | Ownership | `character.controller` only | **`owner`** (for defeat) and **`controller`** (who plays it now) are distinct; control swap changes `controller` only; `countsForDefeat` per character ([04](04-character-status.md), [08](08-players-teams-winlose.md)). |
-| Zones | play + graveyard set | Explicit **play / graveyard** zones; graveyard never targetable; summon/revive move characters between them ([07](07-targeting-zones.md)). |
+| Zones | play + garbage set | Explicit **play / garbage** zones; garbage never targetable; summon/revive move characters between them ([07](07-targeting-zones.md)). |
 | Removal | HP ≤ 0 path only | **`destroy`** is a first-class action; HP ≤ 0 ⇒ destroyed is a *rule* (SBA); simultaneous destruction; `character:destroyed` with a `reason` ([09](09-sba-pass.md), [10](10-destroy.md)). |
 | Exceptions | ad-hoc | **Restrictions** — "cannot be X if Y" — gating targeting, destroy, gauge writes, win/lose; named exceptions pierce ([11](11-restrictions.md)). |
 | Time | none | **Pending-effects registry**: charge-up, channels, stun, timers, countdown win/lose ([12](12-pending-effects.md)). |
@@ -126,7 +126,7 @@ each only depends on earlier ones.
 | **0. Foundations** | Seed module, `Gauge`, `Character` skeleton (identity, owner/controller, zones, status list, skills), id slugging, error conventions | [01](01-gauge.md), [02](02-seed.md), [04](04-character-status.md) (core) | Deterministic PRNG; gauges clamp correctly; characters constructed with skills, queried by status id. |
 | **1. Actions & pipeline** | Action kinds + sugar builders, direction stamping, transformers, `apply` with batching/netting, depth guard, gauge events | [03](03-actions.md) | Damage/heal/netting land correctly; a batch emits one netted `gauge:changed`; infinite chains throw. |
 | **2. Statuses & abilities** | Buff/Skill full lifecycle (removable, `removedOnDefeat`, buff:destroyed self-triggers, cascade, cycle detection, `grantedBy`), the four ability kinds, attach/detach | [04](04-character-status.md), [05](05-abilities.md) | Buff add/remove/explode/cascade behave per rules; cycle refused with `cycle:detected`. |
-| **3. Targeting & host** | `validTargets` over zones with who/match/negate/include, `GameHost` (Auto/Queue), `useAbility` enforcement | [07](07-targeting-zones.md) | Pool filters work; graveyard excluded; out-of-pattern targets rejected. |
+| **3. Targeting & host** | `validTargets` over zones with who/match/negate/include, `GameHost` (Auto/Queue), `useAbility` enforcement | [07](07-targeting-zones.md) | Pool filters work; garbage excluded; out-of-pattern targets rejected. |
 | **4. Events & triggers** | Trigger listener registry, enqueue/drain at unit boundary, seeded shuffle, batch events, `character:destroyed`/`survived` with per-write changes | [06](06-events-triggers.md) | Triggers run after the unit settles, in seeded-shuffled order; game-end short-circuits the drain. |
 | **5. Players, teams, win/lose** | `Player` (owner/controller stamping, `countsForDefeat`, `decide`), `TeamRegistry`, `win`/`lose` actions, draws, `GameEndInterrupt` | [08](08-players-teams-winlose.md) | Ownership-based defeat; two winners ⇒ draw; teamless players are their own team. |
 | **6. SBA pass & destroy** | Destroy action, HP→destroy rule, simultaneous destruction with reasons, content SBA registry, loop-while-changed, depth cap | [09](09-sba-pass.md), [10](10-destroy.md) | A wipe destroys together and fires one event per character; content rules loop and terminate. |
@@ -183,7 +183,7 @@ the choice is visible.
 | --- | --- |
 | Revive HP amount (01) | Revive restores **full** HP unless the effect says otherwise; the character lands in play and emits `character:revived`. |
 | Buffs through death (01) | Only `removedOnDefeat: true` buffs leave at death; the rest persist across destruction and revival. |
-| Graveyard order (01) | An **ordered list** in destruction order; queryable (`engine.charactersIn('graveyard')`). |
+| Graveyard order (01) | An **ordered list** in destruction order; queryable (`engine.charactersIn('garbage')`). |
 | SBA layers 3–4 (04) | **Automatic, not explicit steps**: gauges clamp at every write; abilities are derived at query time; aura membership is event-driven. |
 | SBA registry shape (04) | The sketch in [09-sba-pass.md](09-sba-pass.md) (priority, `when`/`then`, loop-while-changed). Built-in priorities: win/lose 10, destroy/create 20, 30/40 reserved, content defaults 50. |
 | Gauge `intent` (06) | `damage` / `heal` / `set` / `other` on gauge-changing actions; the sugar builders stamp it; raw `{ type: 'gauge', update }` defaults to `other`. |
@@ -199,7 +199,7 @@ appear.
 
 - **Costs** (mana costs as declared data, taps, sacrifices) — explore after
   the action vocabulary settles.
-- **Zones beyond play/graveyard** (hand/deck/exile) — not needed yet; the
+- **Zones beyond play/garbage** (hand/deck/exile) — not needed yet; the
   zone abstraction stays queryable.
 - **Attack wrapper / per-hit events** — multi-action damage is enough; the
   `GaugeWrite[]` on destroy/survived events already carries per-write data.

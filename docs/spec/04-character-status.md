@@ -30,7 +30,7 @@ class Character {
   owner: Player | undefined;          // who owns it for defeat purposes
   controller: Player | undefined;     // who plays it right now
   countsForDefeat: boolean;           // default true for player-created characters
-  destroyed: boolean;                 // set by the engine when moved to the graveyard
+  destroyed: boolean;                 // set by the engine when moved to the garbage
 
   // The status list (buffs *and* skills), sorted by weight ascending:
   get statuses(): readonly Status[];
@@ -238,7 +238,7 @@ already missing the fallen buffs. Strictly wearer-scoped
   pinning is automatic (the form fold treats live ties as dominant — a
   suppressed push changes nothing and emits no event), and the form-stack
   SBA step at each settle pops any **dangling** tie (one whose keying buff
-  is gone by a bypass path), the way the destroy phase keeps the graveyard
+  is gone by a bypass path), the way the destroy phase keeps the garbage
   honest ([09-sba-pass.md](09-sba-pass.md) §5).
 - **Pop.** The `popTransform` action pops the character's *current
   effective* transformation, returning them to the previous state. A
@@ -261,10 +261,10 @@ already missing the fallen buffs. Strictly wearer-scoped
   Expiration is a **timer** (pending effects, [12](12-pending-effects.md))
   that destroys the summon at 0 through the normal destroy path — expired
   summons fire death triggers like any other destruction.
-- **Revive** (`revive` Action): moves a character graveyard → play,
+- **Revive** (`revive` Action): moves a character garbage → play,
   restores HP (spec default: **full**), emits `character:revived`. Only
   `removedOnDefeat` buffs left at death; the rest are still there when it
-  comes back. Reviving a character not in the graveyard is a misuse (throw).
+  comes back. Reviving a character not in the garbage is a misuse (throw).
 - **"Dies with summoner" is an ability**, not a built-in rule — a trigger
   on the summoner's `character:destroyed` event that destroys the summon.
 
@@ -288,6 +288,6 @@ already missing the fallen buffs. Strictly wearer-scoped
 7. A status trying to grant one of its own ancestors is refused, the
    grantor is removed, and `cycle:detected` fires; no infinite recursion.
 8. `summon` lands a character in play and emits `character:summoned`;
-   `revive` moves a graveyard character back to play at full HP and emits
+   `revive` moves a garbage character back to play at full HP and emits
    `character:revived`; `control` swaps controller without touching owner;
    a transform swaps the form, clamps maxes, and keeps buffs.

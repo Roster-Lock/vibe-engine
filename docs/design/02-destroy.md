@@ -28,7 +28,7 @@ future entity kind with HP defines its own consequence for damage.
   destruction and defeat never disagree.
 - ✅ **Simultaneous destruction (confirmed).** All pending destructions in
   one SBA pass happen **together** — "destroy multiple at the same time
-  where we can": characters move to the graveyard as one phase, on-defeat
+  where we can": characters move to the garbage as one phase, on-defeat
   buffs cleaned per `removedOnDefeat`, then one `character:destroyed` event
   per character, then death triggers run in the **seeded-shuffled order** —
   no defined order, only reproducibility between players. A board wipe is

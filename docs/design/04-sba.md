@@ -30,7 +30,7 @@ existing batch behavior). The pass then reads *post-write* state:
 2. **Destroy / Creation** — every pending destruction (HP ≤ 0 unless a
    `destroy` restriction blocks it, summon timers at 0, queued `destroy`
    actions) happens **simultaneously** (confirmed): all characters move to
-   the graveyard together, on-defeat buffs cleaned per `removedOnDefeat`,
+   the garbage together, on-defeat buffs cleaned per `removedOnDefeat`,
    then one `character:destroyed` event per character. Creations (summons
    landing) join here.
 3. **Gauge settling** — 🔶 *proposed simplification: not an explicit step.*

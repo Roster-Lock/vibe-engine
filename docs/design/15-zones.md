@@ -9,20 +9,20 @@
 > which un-defers the stack from this doc's "Open" section and makes `stack`
 > one of the declared zones.
 >
-> Supersedes the README's deferred entry "*Zones beyond play/graveyard — no
+> Supersedes the README's deferred entry "*Zones beyond play/garbage — no
 > hand/deck/exile for now*". Motivated by `examples/card-game/` — see its
 > README for the gaps this doc closes.
 
 ## The model
 
 The engine already has zones. It has them **hard-coded twice, for one entity
-type**: `play` and `graveyard` are two `Set<Character>` fields on the engine,
+type**: `play` and `garbage` are two `Set<Character>` fields on the engine,
 and `destroy` is a bespoke path that moves a character between them.
 
 A card game needs a library, a hand, a discard pile, an exile pile, and
 *temporary* piles conjured in the middle of an effect. So the decision is not
 to bolt a second pile mechanism onto the side — it is to **generalize the one
-the engine already has**, and reimplement destroy/graveyard on top of it.
+the engine already has**, and reimplement destroy/garbage on top of it.
 
 Three concepts, in order of dependency:
 
@@ -42,7 +42,7 @@ The engine's pipeline already does, for actions, all the work that zone
 changes need:
 
 - **`ActionTransformer` becomes replacement effects.** *"If a card would go
-  to your graveyard, exile it instead"* is the single most common effect
+  to your garbage, exile it instead"* is the single most common effect
   class in a card game, and it is `replaceAction` on a `move` — already
   shipped machinery (see [12-replacement-effects](12-replacement-effects.md),
   which this un-defers for the in-pipeline half).
@@ -56,10 +56,10 @@ changes need:
   simultaneous change with one batch event — the pattern
   `character:destroyed:batch` already establishes.
 - **`destroy` collapses into a special case** — `move(character, play,
-  graveyard)`. One mechanism, not two that fail to compose.
+  garbage)`. One mechanism, not two that fail to compose.
 
 That last point is the argument against making piles a plugin. A plugin pile
-system would sit *beside* the engine's own play/graveyard, so a replacement
+system would sit *beside* the engine's own play/garbage, so a replacement
 effect written against plugin piles could not intercept the engine's own
 destroy — two mechanisms, silently non-composing. Generalize first; extend
 later.
@@ -76,29 +76,29 @@ later.
   character form on the entity that was already there. Death triggers,
   "return it to your hand", and "it remembers what happened to it" all work
   because the identity never changes.
-- ✅ **`play` and `graveyard` become ordinary zones.** No special fields, no
+- ✅ **`play` and `garbage` become ordinary zones.** No special fields, no
   special paths. Targeting still draws from `play` only
   ([05-targeting](05-targeting.md)); that becomes a property of the zone
   (`targetable`) rather than a hard-coded pool filter.
 - ✅ **`destroy` keeps its action, its event, and its `reason` vocabulary**,
-  and is implemented as a `move` to the graveyard. Existing content and the
+  and is implemented as a `move` to the garbage. Existing content and the
   whole destroy design ([02-destroy](02-destroy.md)) are unaffected — this is
   a reimplementation, not a rename.
 - ✅ **Dying *is* a zone change — it is not a second kind of event.** The
   primitive is `zone:changed` out of an `IN_PLAY` zone into the garbage
   pile; `isDeath(event)` is that test, and it is Magic's own definition
-  (rule 700.4: *"dies means 'is put into a graveyard from the
+  (rule 700.4: *"dies means 'is put into a garbage from the
   battlefield'"*). Three questions answer themselves as a result: a
   **bounce** (play → hand) leaves play without dying, an **exile** (play →
   some other `REMOVED` zone) likewise — which is precisely why
   removal-by-exile dodges death triggers — and a **discard** reaches the
-  graveyard having never been in play, so it is not a death either.
+  garbage having never been in play, so it is not a death either.
   `character:destroyed` stays as the *annotated* view of the same
   transition, carrying the `reason` and the gauge writes a bare move
   cannot: listen to the zone change for the fact, the destruction for the
   forensics. Guarded by `test/zones.test.ts`.
 - ✅ **Zones are declared per game as data, not code.** The engine ships
-  `play` and `graveyard`; a card game declares `library`, `hand`, `discard`,
+  `play` and `garbage`; a card game declares `library`, `hand`, `discard`,
   `exile`. A declaration carries:
 
   | Field | Meaning |
@@ -240,7 +240,7 @@ What remains:
 
 The design's stress test: *"Reveal the top five cards of your library. An
 opponent separates those cards into two piles. Put one pile into your hand and
-the other into your graveyard."* It needs **no card-game-specific engine
+the other into your garbage."* It needs **no card-game-specific engine
 code** — only the slice above.
 
 | Step | Mechanism |
@@ -248,7 +248,7 @@ code** — only the slice above.
 | Reveal the top five | `move` (a list, batched) from `library` to a **temporary public pile** |
 | An opponent separates them into two piles | A `partition` choice whose **chooser is not the controller**; the two groups become two temporary piles |
 | Put one pile into your hand | A `select` choice over the piles, chooser = controller; then `move(pile.contents → hand)` |
-| The other into your graveyard | `move(other.contents → graveyard)` |
+| The other into your garbage | `move(other.contents → garbage)` |
 | The piles cease to exist | Effect scope ends; the empty-pile SBA verifies nothing leaked |
 
 Everything a player sees along the way — the reveal, each move — is an event,
@@ -303,7 +303,7 @@ extra vocabulary **without** opening the action pipeline at all.
   the same question as fog of war, and it should be answered once.
 - 🔶 **`countsForDefeat` across zones** — a character that *leaves* play
   without dying (bounced to hand). Proposal: defeat counts entities in `play`,
-  so leaving play is neutral and only the graveyard is death.
+  so leaving play is neutral and only the garbage is death.
 - ✅ **The stack and priority now exist** (`src/games/cards/stack.ts`),
   reversing [08-countering](08-countering.md)'s time-based decision for the
   card game. Casting is a `move` `hand → stack`; resolving is `stack →
@@ -382,14 +382,14 @@ extra vocabulary **without** opening the action pipeline at all.
   zone. `Character` becomes an entity with gauges and statuses; `EventSource`
   widens.
 - **`actions.ts`** — a `MoveAction` (entities, from, to, position, reason);
-  `destroy` reimplemented as a move to the graveyard, keeping its event and
+  `destroy` reimplemented as a move to the garbage, keeping its event and
   reason vocabulary.
-- **`engine.ts`** — `#characters`/`#graveyard` give way to the zone registry;
+- **`engine.ts`** — `#characters`/`#garbage` give way to the zone registry;
   `apply` gains move batching alongside gauge batching; `validTargets` draws
   from `targetable` zones; a new SBA step verifies collected temporary zones
   are empty.
 - **`events.ts`** — `zone:changed` and `zone:changed:batch`;
-  `character:destroyed` becomes a reason on a move to the graveyard rather
+  `character:destroyed` becomes a reason on a move to the garbage rather
   than an independent path.
 - **`restrictions.ts`** — a new `on: 'move'` restriction kind.
 - **`host.ts`** — `GameHost.requestTargets` generalizes to
@@ -407,18 +407,18 @@ extra vocabulary **without** opening the action pipeline at all.
 Five slices, each shippable and testable on its own. 1–3 are what make the
 card game real; 4 is cheap and self-contained; 5 may never be needed.
 
-1. **Entities, zones, and `move`** — with `destroy`/`graveyard` rebuilt on
+1. **Entities, zones, and `move`** — with `destroy`/`garbage` rebuilt on
    top. The whole existing suite is the regression test: it must stay green
    without changes to its expectations.
 
    **Status: part done.** Shipped: `src/engine/zone.ts` (`Zone`,
    `ZoneRegistry`, declarations as data, per-player instances, ordered
    top/bottom addressing, `capacity`, `group` families); the engine's
-   `#characters`/`#graveyard` sets replaced by the registry, so `play` and
-   `graveyard` are ordinary declared zones; `zone:changed` /
+   `#characters`/`#garbage` sets replaced by the registry, so `play` and
+   `garbage` are ordinary declared zones; `zone:changed` /
    `zone:changed:batch` events; `engine.moveTo` and `engine.zones`; the
    card game's zones declared as data in `src/games/cards/zones.ts`.
-   `destroy` now moves to the graveyard through the registry and announces
+   `destroy` now moves to the garbage through the registry and announces
    the transition (observed as damage → left play → died; the three
    event-sequence assertions in `test/triggered-actions.test.ts` grew the
    new events, no other expectation changed). Covered by
@@ -429,12 +429,12 @@ card game real; 4 is cheap and self-contained; 5 may never be needed.
    whole pipeline: an `ActionTransformer` can redirect it (*"if it would go
    to your garbage, suspend it instead"* — tested), an `on: 'move'`
    restriction can block it outright, moves batch into one
-   `zone:changed:batch`, and the destroy phase's graveyard move is the same
+   `zone:changed:batch`, and the destroy phase's garbage move is the same
    transition. `validTargets` now reads `targetable` off the zone instead
-   of hard-coding a graveyard check, and `isInPlay` is a zone-**family**
+   of hard-coding a garbage check, and `isInPlay` is a zone-**family**
    question (`group === IN_PLAY`) rather than "registered and not dead" —
    so a bounced entity is out of the target pool without being dead.
-   Defeat still counts the graveyard, so **leaving play is neutral for
+   Defeat still counts the garbage, so **leaving play is neutral for
    win/lose**: a hero card in hand has not lost.
 
    **`Entity` now exists, as an interface.** `Entity` is `{ type, name }` —
@@ -471,7 +471,7 @@ card game real; 4 is cheap and self-contained; 5 may never be needed.
      constructs its `Gauge` instances up front; not paying for them at all
      needs lazily realized gauges, which is a separate change from the
      semantics above.
-   - **`destroy` still owns its phase.** Its graveyard transition goes
+   - **`destroy` still owns its phase.** Its garbage transition goes
      through the registry and announces `zone:changed`, but the deferral,
      the simultaneous-death batching and the `reason` vocabulary remain a
      dedicated path rather than a plain `move`. That is deliberate — the

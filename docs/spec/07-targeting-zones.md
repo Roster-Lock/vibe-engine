@@ -8,18 +8,18 @@
 The engine owns two character zones:
 
 - **play** — registered characters that can act and be targeted;
-- **graveyard** — destroyed characters, in destruction order (ordered list;
-  queryable, e.g. `engine.charactersIn('graveyard')` or the `graveyard`
+- **garbage** — destroyed characters, in destruction order (ordered list;
+  queryable, e.g. `engine.charactersIn('garbage')` or the `garbage`
   getter).
 
 Rules:
 
-- **Targeting pools draw from the play zone only.** A graveyard character is
+- **Targeting pools draw from the play zone only.** A garbage character is
   not in any pool — no per-spell "cannot target dead" checks, and the
   "fireball a corpse" problem dies by construction.
-- Characters move between zones on **destroy** (play → graveyard),
-  **summon** (creation → play), and **revive** (graveyard → play).
-- If graveyard-scoped abilities are ever needed, a pattern-level
+- Characters move between zones on **destroy** (play → garbage),
+  **summon** (creation → play), and **revive** (garbage → play).
+- If garbage-scoped abilities are ever needed, a pattern-level
   `allowGraveyard` flag can be added — the zone abstraction keeps that door
   open without special-casing.
 
@@ -66,7 +66,7 @@ re-targeting anything.
 engine.validTargets(pattern: TargetPattern, self: Character): Character[]
 ```
 
-1. Filter the pool to the **play zone** (graveyard excluded).
+1. Filter the pool to the **play zone** (garbage excluded).
 2. Filter by `who` (via `isAlly`/`isEnemy`).
 3. Apply `match` — or, when `negate` is set, exclude candidates that match
    (with no `match`, invert the `who` filter).

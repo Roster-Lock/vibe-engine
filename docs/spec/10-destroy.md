@@ -52,7 +52,7 @@ has that character, they **do not lose**
 All pending destructions in one SBA pass happen **together** — "destroy
 multiple at the same time where we can":
 
-1. characters move to the graveyard as **one phase**;
+1. characters move to the garbage as **one phase**;
 2. on-defeat buffs cleaned per `removedOnDefeat` (before the move — a
    bomb-style buff explodes during the cleanup, slightly before death
    triggers; the cascade it causes is absorbed by the pass loop);
@@ -106,10 +106,10 @@ gauge writes land (netted)
 
 ## 6. Acceptance criteria (Slice 6)
 
-1. `destroy(target)` moves the character to the graveyard in the next SBA
+1. `destroy(target)` moves the character to the garbage in the next SBA
    pass and fires `character:destroyed` with `reason: 'direct-action'` and
    the destroyer as `source`.
-2. Two `destroy` actions in one apply land the victims in the graveyard
+2. Two `destroy` actions in one apply land the victims in the garbage
    together (one phase); each fires its event, then one
    `character:destroyed:batch` fires.
 3. A character at HP ≤ 0 is destroyed with `reason:

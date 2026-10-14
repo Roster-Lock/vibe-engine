@@ -24,13 +24,13 @@ everyone references — buffs, triggers, targeting) and a mutable **form**
   owner's defeat. Default `true` for player-created characters, `false` for
   summons, overridable per summon (an "Avatar" summon can count; "bugs" that
   spawn by the hundred do not). See 03-win-lose.
-- ✅ **Dead state + graveyard.** Characters in **play** are alive; destroyed
-  characters move to the **graveyard**. Targeting pools draw from play only —
+- ✅ **Dead state + garbage.** Characters in **play** are alive; destroyed
+  characters move to the **garbage**. Targeting pools draw from play only —
   no per-spell "cannot target dead" checks needed. This was chosen over
   keeping dead and alive characters in one list and excluding dead ones per
   ability (the "fireball a corpse" problem dies by construction).
 - ✅ **Revive is a dedicated effect**, not heal-on-corpse: moves a character
-  graveyard → play, restores HP, emits `character:revived`.
+  garbage → play, restores HP, emits `character:revived`.
 - ✅ **Identity vs form (transformation).** The Character object is never
   replaced. A transform swaps the *form*: skills/abilities, gauge maxes
   (current clamps to `Math.min(current, newMax)`), name/icon. Buffs persist
@@ -85,7 +85,7 @@ everyone references — buffs, triggers, targeting) and a mutable **form**
 ## Engine implications
 
 - `character.ts`: drop `team`; add `owner`, `countsForDefeat`, a `dead`
-  flag, and zone membership (play/graveyard).
+  flag, and zone membership (play/garbage).
 - `player.ts`: stamp `owner` (and `controller`) at construction; keep
   `characters` as the **ownership** list; `isDefeated` = every owned
   `countsForDefeat` character is dead.

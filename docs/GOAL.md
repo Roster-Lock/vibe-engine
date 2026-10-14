@@ -174,13 +174,42 @@ errors back to the author.
   gauge against a board count, is expressible where the old split could
   only compare one gauge to a literal. An entity question asked with no
   entity in scope answers false rather than throwing.
-- 🔶 Zones: **slice 1 part done** — `src/engine/zone.ts` generalizes the
-  engine's two hard-coded `Set<Character>` piles into declared zones, and
-  `destroy` is now a move to the `graveyard` zone that announces
-  `zone:changed`. The card game's deck/hand/stack/active are declared as
-  data (`src/games/cards/zones.ts`). `move`-as-an-`Action` — the half that
-  buys replacement effects and move restrictions — is still ahead. See
-  docs/design/15-zones.md.
+- ✅ **Zones are one model, and the card game uses it** (this session):
+  `src/engine/zone.ts` generalizes the engine's two hard-coded
+  `Set<Character>` piles into declared zones; `destroy` is a move to
+  `garbage`; `move` is an ordinary **Action** (`engine.moveTo`), so
+  replacement effects and move restrictions can intercept it. The card
+  game's deck, hand, stack, `active` and garbage are engine zones holding
+  real entities — the example's private `Zone<T>` pile class is gone — so
+  `engine.zones.zoneOf(card)` answers, a draw is a move content can answer,
+  casting runs the full Magic-shaped path
+  (`deck → hand → stack → active → garbage | play`), and a game can still
+  declare a zone on demand (`engine.zones.declare`). A **card and the
+  creature it becomes are one entity** — the decided model in
+  docs/design/15-zones.md: a creature card is instantiated once, moves
+  through every zone, and is the same object on the board and in the
+  garbage. Casting **stops on the stack**: `CardStack.runPriority` gives every
+  player priority, `speed.ts`'s instant symbol marks a card or an activated
+  ability so `canPut` tells an instant from a sorcery, and **triggered
+  abilities are respondable to** too — the engine runs on
+  `CardStack.scheduler()`, so a trigger is queued and put on the stack at
+  the next priority window instead of running where it fired. Garbage is
+  **per-player**: the engine's destroy resolves the controller's pile, so a
+  destroyed permanent and a spent spell land together in the pile their
+  owner reads. **Open:** attacks and the hero power are still immediate
+  (combat, not spells) — what they trigger gets a window, but they cannot be
+  answered. See docs/design/15-zones.md.
+- ✅ **Game rules are data, not a turn script** (this session): the card
+  game's untap/upkeep/draw steps are a **rule set**
+  (`src/games/cards/rules.ts` — id, English name, timing, scope, actions)
+  that the loop applies, not code it runs. The rules are listable (the card
+  table shows them), replaceable by id (`game.rules.add` — "draw two
+  instead" is one draw rule, not two), removable, and an action the host
+  does not know fails loudly. Guarded by `test/card-game-rules.test.ts`.
+  **Open:** the ability language cannot yet *write* a rule change — a
+  revealed card's "at the start of your turn, draw an extra card" needs a
+  sentence that compiles to a `GameRule`, which is the language work the
+  mechanism now unblocks.
 - ✅ **Buff durations and action modifiers** (this session): `Buff Mark
   (until end of turn)` / `(for 2 turns)` — a duration is not an engine
   concept, it lowers to an ordinary triggered ability on the buff that
@@ -304,6 +333,128 @@ errors back to the author.
   as words — `an even number of characters die`. A `%` meaning remainder
   would be misread as a percentage every time, and percent is the far more
   common need.
+- ✅ **The card game is playable, and cards are authorable** (this session):
+  the Card Document (`Card Fireball` / `Cost 4` / `Spell` / `Deal 6 damage
+  to target enemy character.`) is a second document kind on the same
+  language — a cost, a stat line or `Spell`, keywords, and effect lines that
+  **name their event** (`When this enters play then …`, `When this dies then
+  …`) instead of using card-only shorthand. Its effect lines compile through
+  the ordinary ability grammar (same diagnostics, same IR, same `cast`), so
+  an authored card runs the identical action pipeline as the hand-written
+  catalog. The UI gained a **Card Creator** with per-word completion and
+  validation and a live card face, and a **card table** — you vs the AI,
+  hotseat, or watch two AIs — where both decks are the starter deck plus
+  the cards saved from the creator. Effects may now be awaited by the card
+  layer, because an authored `You may …`/`Repeat …` asks the controller
+  mid-resolution. Guarded by `test/card-language.test.ts`,
+  `test/card-game-english.test.ts` and `test/card-game-interactive.test.ts`.
+- ✅ **Zone movement is trigger vocabulary** (this session): triggers can
+  name a zone and either end of a move — `when this enters play from active
+  then …`, `when 2 or more characters enter play then …`, `when this
+  enters a garbage from play then …`, `when this leaves play then …`.
+  Zone names are host-supplied (the engine ships `play`/`garbage`; a game
+  declares the rest) and lower to the engine's existing `zone:changed`
+  event, so nothing new fires — the language stopped assuming an entity
+  only ever exists in one place. The engine gained the matching seam
+  (`registerCharacter(character, { zone })`, so an entity can be *staged*
+  out of play and then moved in, making `from` a real fact rather than an
+  assumption), and the card game now stages a played creature in `active`
+  and moves it into `play`: `from stack` is unreachable by playing a card,
+  which is the cheat the phrasing exists to catch. An arrival effect that
+  picks a target stays the card's play-time effect (the player chooses as
+  the card is played); one that picks nothing is an ordinary zone trigger.
+  Guarded by `test/zone-triggers.test.ts` (20 tests) and the card suites.
+- 🔶 **The IR became readable; the Blockly surface was parked** (this session):
+  `docs/design/18-english-and-blocks.md`. The useful half stayed —
+  `src/english/render.ts` is the **IR → English** direction the language never
+  had (the inverse of `lower.ts`), total and always parseable, with `gaps`
+  naming anything the sentence grammar cannot spell. It round-trips every
+  document in the suite (`test/render.test.ts`), and it is what makes a document
+  *readable* rather than a write-only share format.
+  The ambitious half — a **Blockly** surface over the same IR — was built and
+  verified end to end (blocks ⇄ IR lossless, text → blocks → text stable, typed
+  connections refusing a mistyped drop) and then **removed**: it needed
+  `blockly@13` and took the bundle to 5.5 MB for a second editor beside Monaco,
+  and a workspace measured **6× the English for a card and 11× for an ability**,
+  a quarter of it block ids and cursor positions. English is also today the only
+  *complete* shareable artifact for a card, since a compiled card holds engine
+  closures and the ability IR is only a fragment of it. The design, the two
+  traps that cost real time, and the size measurements are all in doc 18 if the
+  idea comes back.
+- ✅ **The glossary — any word in any surface is selectable** (this session):
+  a player who does not understand a word can select it and be told, and the
+  same mechanism serves the card table, the buff chips, the minion tokens, the
+  combat log and both editors. The definitions already existed but were
+  scattered across six modules with each surface re-implementing "which word is
+  under the cursor, and what does it mean?" — so a new keyword had to be found
+  in five places, and the *game* had no clickable terms at all.
+  `src/english/glossary.ts` is the neutral core: a `TermRef` resolves to a
+  `Term` through ordered **sources** (`words` → `cardWords` → `keywords` →
+  `buffs` → `zones` → `characters` → custom → a host `define` hook that runs
+  last and reads live state), and `annotate` finds the terms in a text run —
+  by scanning prose, or from spans a caller already knows (a buff badge, a
+  minion token). `src/ui/glossary/` is the shared interaction: `Gloss`, `Term`,
+  and a **panel** that keeps a trail, so "discover" → "library" → back is
+  navigable. Deliberately *not* game-specific: a game adds meaning by adding a
+  source, and the interaction layer is used unchanged. **Registered keywords**:
+  `KeywordDef` is now the one place a keyword is declared — a registered
+  keyword is a legal card line, completes, prints, and is explained on hover,
+  and `handled: false` names a mechanic the game may write but not grant.
+  `Taunt`/`Charge` became the first two entries and their editor docs are
+  derived from the registry instead of restated. Guards:
+  `test/glossary.test.ts` (34), `test/keywords.test.ts` (15),
+  `test/glossary-ui.test.tsx` (12). Design, the module cycle that forced the
+  source split, and the **`Discover` execution design** (the engine has no
+  reveal primitive at all — a peek is not a move) are in
+  docs/design/19-glossary.md.
+- ✅ **`Discover` executes — and the engine gained the primitives a reveal needs**
+  (this session): the mechanic is five sub-behaviours (repeat, peek, test a
+  hidden card, offer it, bottom-and-shuffle) and four of them are side effects,
+  so the decisive call was that it is an **Action**, not a bind-time loop:
+  `effectActions` is a *pure* `EffectIR → Action[]`, and the loop has to **ask
+  the player mid-resolution**. So `DiscoverAction` is a built-in `ActionMap`
+  entry, `EffectIR.discover` binds to it (still one JSON node), and
+  `GameEngine.#discover` runs the loop. The engine now has the primitives it
+  lacked: **`Engine.reveal`** (peek an ordered zone *without moving* — announces
+  nothing, because nothing changed zone), **`Engine.shuffleZone`**, and
+  **`Entity.attributes`** (any numeric fact a game declares — `cost`, a `land`
+  flag — read by name, absent reads 0), plus **`ValueIR.attribute`** so content
+  can read one. The IR names zones **abstractly** (`library`, `board`) and the
+  host maps them (`BindOptions.aliases`), because a shared document must mean the
+  same thing in a game whose library is `deck` and one that calls it `pile`.
+  Three bugs the tests caught, all kept in doc 19 as warnings: a loop over
+  `reveal` re-examined the same card (a declined card goes to the bottom of *the
+  same zone*), the entity-in-scope was never bound inside an effect loop (so a
+  bare `gauge`/`attribute` amount silently read 0 — a latent bug in the existing
+  `gauge` path too), and `ActionBase` is a *declared-keys* invariant so a new
+  action must declare `direction`/`bypasses`. Guards: `test/discover.test.ts`
+  (22) and `test/discover-ir.test.ts` (9). The reveal also became a **move into a
+  temporary zone** rather than a peek, at the user's direction: a peek fires no
+  `zone:changed`, so "when a card is revealed, …" was unanswerable, and the
+  handler had to remember what it had looked at. Now the card genuinely leaves
+  the library into a declared holding zone (`REVEALED`, `group: 'resolving'`),
+  so the reveal is observable and "the rest" is that zone's members. A `skip`
+  fact map covers "or a land" — a land has no cost to compare, and it compiles
+  from a predicate to plain facts so the engine still does not know what a land
+  is. **Still open:** the English sentence
+  `Discover(2).` (registered as a keyword, printed and explained, but
+  `KeywordDef.parse` is not yet called by the card compiler; its arguments are
+  now **parenthesised** — `Discover(2)`, with an `arity` range — because the
+  space form cannot tell one word-shaped argument from part of a keyword's name,
+  or hold two arguments at all) and the table UI for
+  a reveal choice — what a client may see of a hidden card is a rules question.
+- ✅ **Definitions are recursive** (this session): selecting a term whose
+  definition mentions another term walks into it, through **the same
+  `annotate`** — no second mechanism. The panel became connected (it reads the
+  trail from context instead of taking a `Term` prop) so its own text is
+  glossed, and the trail is now **breadcrumbs**, because a walk two or three
+  deep makes a plain "back" ambiguous. The first render exposed the real hazard
+  of prose-about-terms: **"HP" in a summary became a link**, so a scan gained a
+  floor (`minAnnotatedLength`, default 2) that keeps `hp`/`xp` and drops single
+  letters. A self-naming definition is a dead link, not a cycle — `open` was
+  already a no-op on the current term. Guard: `test/glossary-ui.test.tsx` (19).
+  The Monaco **hover** is deliberately not recursive: a hover cannot contain a
+  clickable term.
 
 ## What "done" looks like (eventually)
 
