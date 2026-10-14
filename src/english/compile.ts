@@ -24,12 +24,19 @@ import type { BuffDef, ManualAbility, AnyTriggeredAbility } from '../engine/inde
 import { bindDocument, type DocumentIR } from '../ir/index.js';
 import type { BuffSection, CharsPhrase, Diagnostic, Doc, Sentence } from './ast.js';
 import { BuffDictionary, slug, type DictionaryEntry } from './dictionary.js';
+import { emptyZoneDictionary, type ZoneDictionary } from './zone-dictionary.js';
 import { lowerDocument } from './lower.js';
 import { parseDocument } from './parser.js';
 
 export interface CompileOptions {
   /** Buffs available to `Add`/`Remove` beyond the document's own `Buff` lines. */
   readonly dictionary?: BuffDictionary;
+  /**
+   * The zone names a `when … enters/leaves <zone>` trigger may name. The
+   * engine's own `play`/`graveyard` are always known; a game adds its deck,
+   * hand, stack, resolving `active` slot, and so on.
+   */
+  readonly zones?: ZoneDictionary;
   /** Resolves a module import to a buff definition. File access stays outside the compiler. */
   readonly resolveImport?: (path: string, importedName: string) => BuffDef | undefined;
 }
@@ -51,7 +58,7 @@ export interface CompileResult {
 }
 
 export function compileDocument(text: string, options: CompileOptions = {}): CompileResult {
-  const parsed = parseDocument(text);
+  const parsed = parseDocument(text, { zones: options.zones ?? emptyZoneDictionary() });
   const builtIns = options.dictionary ?? new BuffDictionary([]);
   const diagnostics: Diagnostic[] = [...parsed.diagnostics];
 

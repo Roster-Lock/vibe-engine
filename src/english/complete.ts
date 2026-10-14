@@ -8,6 +8,7 @@
 import {
   ADJECTIVES,
   CHAR_WORDS,
+  EVENT_PHRASES,
   RESULT_VERBS,
   SENTENCE_STARTERS,
   WITH_OPERATORS,
@@ -16,6 +17,7 @@ import {
 import type { Token } from './lexer.js';
 import { lex } from './lexer.js';
 import { BuffDictionary, emptyDictionary, type DictionaryEntry } from './dictionary.js';
+import { emptyZoneDictionary, type ZoneDictionary } from './zone-dictionary.js';
 
 export type SuggestionKind = 'keyword' | 'class' | 'operator';
 
@@ -33,6 +35,7 @@ export function completeAt(
   text: string,
   offset: number,
   dictionary: BuffDictionary = emptyDictionary(),
+  zones: ZoneDictionary = emptyZoneDictionary(),
 ): Suggestion[] {
   const prefixText = text.slice(0, offset);
   const lexed = lex(prefixText);
@@ -86,8 +89,8 @@ export function completeAt(
         : walk;
   // Buffs the document itself declares are offerable too ("Toxic Tentacles").
   const effectiveDictionary = withDeclaredBuffs(dictionary, buffDeclarationsIn(lex(text)));
-  const expectations = expectationsFor(sentenceTokens, effectiveDictionary);
-  return suggestionsFor(expectations, typedPrefix, effectiveDictionary);
+  const expectations = expectationsFor(sentenceTokens, effectiveDictionary, zones);
+  return suggestionsFor(expectations, typedPrefix, effectiveDictionary, zones);
 }
 
 /**
@@ -126,6 +129,7 @@ type Expectation =
   | { readonly kind: 'words'; readonly words: string[] }
   | { readonly kind: 'wordsAndBuffs'; readonly words: string[] }
   | { readonly kind: 'buffNames' }
+  | { readonly kind: 'zones' }
   | { readonly kind: 'number' }
   | { readonly kind: 'none' };
 
@@ -140,13 +144,15 @@ const sentenceStartWords = (): string[] => [
  * the partial word is the prefix) and returns what the grammar accepts
  * next.
  */
-function expectationsFor(tokens: Token[], _dictionary: BuffDictionary): Expectation {
+function expectationsFor(tokens: Token[], _dictionary: BuffDictionary, zones: ZoneDictionary): Expectation {
   const first = tokens[0];
   if (!first) return { kind: 'words', words: sentenceStartWords() };
   if (first.kind !== 'word') return { kind: 'none' };
 
   const lower = first.lower;
   switch (lower) {
+    case 'when':
+      return walkTrigger(tokens, 1, zones);
     case 'deal':
       return walkDeal(tokens, 1);
     case 'heal':
@@ -163,6 +169,96 @@ function expectationsFor(tokens: Token[], _dictionary: BuffDictionary): Expectat
     default:
       return { kind: 'words', words: sentenceStartWords() };
   }
+}
+
+/* ------------------------------ triggers ------------------------------- */
+
+/** The zone verbs, which name a zone rather than an event. */
+const ZONE_VERBS = ['enters', 'enter', 'leaves', 'leave'] as const;
+
+/** The words that can end a trigger's subject and start its event verb. */
+function isEventVerbWord(word: string | undefined): boolean {
+  if (word === undefined) return false;
+  return ZONE_VERBS.includes(word as (typeof ZONE_VERBS)[number]);
+}
+
+/** How many words the event verb at `i` spans, or 0 when there is none. */
+function eventVerbLengthAt(tokens: Token[], i: number): number {
+  let best = 0;
+  for (const phrase of EVENT_PHRASES) {
+    for (const words of phrase.verbs) {
+      if (words.length <= best) continue;
+      if (words.every((word, offset) => tokens[i + offset]?.lower === word)) best = words.length;
+    }
+  }
+  if (best === 0 && isEventVerbWord(tokens[i]?.lower)) best = 1;
+  return best;
+}
+
+/**
+ * `when <count>? <subject> <event> [from|to <zone>] then <effect>.`
+ *
+ * The subject's own grammar is walked by the same phrase code the other
+ * completions use, but a trigger only needs to know *where the verb starts*
+ * — so this scans to the first event verb, then completes the verb, its
+ * zone (if it names one), the optional other end, and finally the effect.
+ */
+function walkTrigger(tokens: Token[], start: number, zones: ZoneDictionary): Expectation {
+  // Find the event verb. Everything before it is the subject/count phrase.
+  let i = start;
+  let length = 0;
+  while (i < tokens.length) {
+    length = eventVerbLengthAt(tokens, i);
+    if (length > 0) break;
+    i += 1;
+  }
+  if (length === 0) {
+    // Still writing the subject (or a count phrase).
+    return {
+      kind: 'words',
+      words: ['this', 'a', 'characters', '1', '2', '3', ...ZONE_VERBS, ...eventVerbs()],
+    };
+  }
+
+  const verb = tokens[i]!.lower;
+  i += length;
+  if (isEventVerbWord(verb)) {
+    // `enters <zone> [from <zone>]` / `leaves <zone> [to <zone>]`.
+    const article = tokens[i]?.kind === 'word' && ['a', 'an', 'the'].includes(tokens[i]!.lower);
+    if (article) i += 1;
+    if (i >= tokens.length || tokens[i]!.kind !== 'word') return { kind: 'zones' };
+    i += 1; // the zone name
+    const preposition = verb.startsWith('enter') ? 'from' : 'to';
+    const next = tokens[i];
+    if (next === undefined) return { kind: 'words', words: [preposition, 'then'] };
+    if (next.kind === 'word' && (next.lower === 'from' || next.lower === 'to')) {
+      const other = tokens[i + 1];
+      if (other === undefined) return { kind: 'zones' };
+      i += 2;
+      return tokens[i] === undefined ? { kind: 'words', words: ['then'] } : walkThen(tokens, i);
+    }
+    return { kind: 'words', words: [preposition, 'then'] };
+  }
+
+  return walkThen(tokens, i);
+}
+
+/** After a trigger's `then`, the effect is an ordinary sentence. */
+function walkThen(tokens: Token[], i: number): Expectation {
+  const next = tokens[i];
+  if (next === undefined) return { kind: 'words', words: ['then'] };
+  if (next.kind !== 'word' || next.lower !== 'then') return { kind: 'words', words: ['then'] };
+  return { kind: 'words', words: effectStartWords() };
+}
+
+/** The verbs a sentence may start with (the effect half of a trigger). */
+function effectStartWords(): string[] {
+  return SENTENCE_STARTERS.map(capitalize).filter((word) => word !== 'When');
+}
+
+/** Every event verb, as written, for offering at the verb position. */
+function eventVerbs(): string[] {
+  return EVENT_PHRASES.flatMap((phrase) => phrase.verbs.map((words) => words.join(' ')));
 }
 
 /** `Deal <n> damage to <chars>.` */
@@ -438,6 +534,7 @@ function suggestionsFor(
   expectation: Expectation,
   prefix: string,
   dictionary: BuffDictionary,
+  zones: ZoneDictionary,
 ): Suggestion[] {
   switch (expectation.kind) {
     case 'words':
@@ -449,10 +546,25 @@ function suggestionsFor(
       ];
     case 'buffNames':
       return namesToSuggestions(dictionary, prefix);
+    case 'zones':
+      return zoneToSuggestions(zones, prefix);
     case 'number':
     case 'none':
       return [];
   }
+}
+
+/** The zone names a game declared, as completion items. */
+function zoneToSuggestions(zones: ZoneDictionary, prefix: string): Suggestion[] {
+  const names = prefix
+    ? zones.names.filter((name) => name.toLowerCase().startsWith(prefix))
+    : zones.names;
+  return names.map((name) => ({
+    label: name,
+    kind: 'class',
+    detail: 'zone',
+    doc: `\`${name}\` — a zone this game declares. A trigger can name it with "enters ${name}" / "leaves ${name}".`,
+  }));
 }
 
 function wordsToSuggestions(words: string[], prefix: string): Suggestion[] {

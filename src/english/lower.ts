@@ -288,6 +288,15 @@ function lowerTrigger(trigger: TriggerSentence, scope: 'self' | 'game', index: n
     mode: trigger.mode,
     ...(trigger.gauge !== undefined ? { gauge: trigger.gauge } : {}),
     ...(trigger.change !== undefined ? { change: trigger.change } : {}),
+    ...(trigger.zone
+      ? {
+          zone: {
+            verb: trigger.zone.verb,
+            id: trigger.zone.id,
+            ...(trigger.zone.opposite !== undefined ? { opposite: trigger.zone.opposite } : {}),
+          },
+        }
+      : {}),
     ...(gate ? { when: gate } : {}),
     ...(filter ? { filter } : {}),
     steps: trigger.effects.map(lowerStep),

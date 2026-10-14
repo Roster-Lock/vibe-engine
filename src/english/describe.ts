@@ -239,6 +239,13 @@ export function triggerSummary(trigger: TriggerSentence): string {
  * (`EVENT_PHRASES`), so a new verb needs no second entry here.
  */
 function verbOf(trigger: TriggerSentence): string {
+  // A zone movement names its zone, not a table verb: "enters play from
+  // active" / "leaves play". Plural for a batch, singular for one event.
+  if (trigger.zone) {
+    const verb = trigger.zone.verb === 'enters' ? (trigger.mode === 'single' ? 'enters' : 'enter') : trigger.mode === 'single' ? 'leaves' : 'leave';
+    const preposition = trigger.zone.verb === 'enters' ? 'from' : 'to';
+    return `${verb} ${trigger.zone.id}${trigger.zone.opposite !== undefined ? ` ${preposition} ${trigger.zone.opposite}` : ''}`;
+  }
   // Compared by value, not identity: a gauge selector may be the object
   // `{ kind: 'life' }`, where `===` would only hold for the very same
   // instance the parser happened to copy.

@@ -41,6 +41,7 @@ import type {
   TargetBinding,
   RepeatClause,
   TriggerSentence,
+  ZonePhrase,
   ConditionJoiner,
   Diagnostic,
   Doc,
@@ -53,11 +54,17 @@ import type {
   WithOperator,
 } from './ast.js';
 import { lex, type Token } from './lexer.js';
+import { ZoneDictionary, emptyZoneDictionary } from './zone-dictionary.js';
 import type { MathExpression } from '../ir/index.js';
 
 export interface ParseResult {
   readonly doc: Doc;
   readonly diagnostics: Diagnostic[];
+}
+
+export interface ParseOptions {
+  /** The zone names a trigger may name (a game's deck, stack, active slot…). */
+  readonly zones?: ZoneDictionary;
 }
 
 const ABILITY_NAME_FALLBACK = 'Untitled';
@@ -72,14 +79,16 @@ interface BuffOptions {
   readonly end: number;
 }
 
-export function parseDocument(text: string): ParseResult {
-  return new Parser(text).parse();
+export function parseDocument(text: string, options: ParseOptions = {}): ParseResult {
+  return new Parser(text, options).parse();
 }
 
 class Parser {
   readonly #tokens: Token[];
   readonly #diagnostics: Diagnostic[] = [];
   readonly #text: string;
+  /** The zone names this document may name — engine zones plus the host's. */
+  readonly #zones: ZoneDictionary;
   #index = 0;
   /**
    * While true, a comma **ends** a condition instead of reading as `and`.
@@ -91,9 +100,10 @@ class Parser {
    */
   #commaEndsCondition = false;
 
-  constructor(text: string) {
+  constructor(text: string, options: ParseOptions = {}) {
     this.#text = text;
     this.#tokens = lex(text);
+    this.#zones = options.zones ?? emptyZoneDictionary();
   }
 
   parse(): ParseResult {
@@ -606,10 +616,15 @@ class Parser {
       this.#fail(verbToken, `expected an event verb after the subject — ${this.#eventVerbList()}`, 'syntax');
       return this.#abort();
     }
+    // A **zone movement** is its own verb shape — `enters <zone> [from
+    // <zone>]` / `leaves <zone> [to <zone>]` — because the zone names it,
+    // not an `EventPhrase` entry from a fixed table.
+    const zone = this.#parseZoneVerb();
+    if (zone === null) return this.#abort();
     // Verbs may be several words ("takes damage"), so match the longest
     // sequence that fits.
-    const matched = this.#matchEventVerb();
-    if (!matched) {
+    const matched = zone ? undefined : this.#matchEventVerb();
+    if (!zone && !matched) {
       this.#fail(
         verbToken,
         `"${verbToken.text}" is not an event verb — ${this.#eventVerbList()}`,
@@ -617,7 +632,7 @@ class Parser {
       );
       return this.#abort();
     }
-    const { phrase, words } = matched;
+    const phrase = matched?.phrase;
 
     const mode: 'single' | 'batch' = singular ? 'single' : 'batch';
     if (!this.#matchWord(THEN)) {
@@ -630,15 +645,109 @@ class Parser {
     return {
       kind: 'trigger',
       span: { start: start.start, end: effect.span.end },
-      event: mode === 'batch' ? phrase.batchEvent : phrase.event,
+      event: zone
+        ? mode === 'batch'
+          ? 'zone:changed:batch'
+          : 'zone:changed'
+        : mode === 'batch'
+          ? phrase!.batchEvent
+          : phrase!.event,
       mode,
-      ...(phrase.gauge !== undefined ? { gauge: phrase.gauge } : {}),
-      ...(phrase.change !== undefined ? { change: phrase.change } : {}),
+      ...(phrase?.gauge !== undefined ? { gauge: phrase.gauge } : {}),
+      ...(phrase?.change !== undefined ? { change: phrase.change } : {}),
+      ...(zone ? { zone } : {}),
       count: count ?? undefined,
       subject,
       eventSpan: { start: verbToken.start, end: this.#previous().end },
       effects: [effect],
     };
+  }
+
+  /**
+   * `enters <zone> [from <zone>]` / `leaves <zone> [to <zone>]` — the
+   * game-agnostic zone-movement verb.
+   *
+   * Returns `undefined` when this is not a zone phrase (so the caller falls
+   * back to the ordinary event table), the phrase when it parsed, and
+   * `null` when it *is* one but malformed — an error, not an absence.
+   */
+  #parseZoneVerb(): ZonePhrase | undefined | null {
+    const verb = this.#peek();
+    if (verb.kind !== 'word') return undefined;
+    const enters = verb.lower === 'enters' || verb.lower === 'enter';
+    const leaves = verb.lower === 'leaves' || verb.lower === 'leave';
+    if (!enters && !leaves) return undefined;
+    const kind = enters ? 'enters' : 'leaves';
+    this.#advance();
+
+    const preposition = kind === 'enters' ? 'from' : 'to';
+    const zone = this.#parseZoneName(
+      kind === 'enters'
+        ? 'expected the zone it enters, e.g. "enters play"'
+        : 'expected the zone it leaves, e.g. "leaves play"',
+    );
+    if (zone === null) return null;
+
+    // The optional other end. `enters` takes `from`, `leaves` takes `to` —
+    // the wrong one is worth naming rather than reporting as a stray word.
+    let opposite: string | undefined;
+    const next = this.#peek();
+    if (next.kind === 'word' && (next.lower === 'from' || next.lower === 'to')) {
+      if (next.lower !== preposition) {
+        this.#fail(
+          next,
+          `"${kind}" takes "${preposition} <zone>" — the zone it ${
+            kind === 'enters' ? 'came from' : 'goes to'
+          } — not "${next.lower}"`,
+          'zone-preposition',
+        );
+        return null;
+      }
+      this.#advance();
+      const other = this.#parseZoneName(`expected a zone after "${preposition}", e.g. "${kind} play ${preposition} hand"`);
+      if (other === null) return null;
+      opposite = other;
+    }
+
+    return {
+      verb: kind,
+      id: zone,
+      ...(opposite !== undefined ? { opposite } : {}),
+      span: { start: verb.start, end: this.#previous().end },
+    };
+  }
+
+  /**
+   * One zone name, resolved to the host's canonical spelling. A name the
+   * dictionary does not know is reported with the names it does know — the
+   * same courtesy an unknown buff gets.
+   */
+  #parseZoneName(expectation: string): string | null {
+    // "enters a graveyard" / "enters the graveyard" read as English; the
+    // article carries no meaning, so it is skipped.
+    const article = this.#peek();
+    if (article.kind === 'word' && (article.lower === 'a' || article.lower === 'an' || article.lower === 'the')) {
+      this.#advance();
+    }
+    const token = this.#peek();
+    if (token.kind !== 'word') {
+      this.#fail(token, expectation, 'syntax');
+      return null;
+    }
+    this.#advance();
+    const resolved = this.#zones.resolve(token.text);
+    if (resolved === undefined) {
+      const suggestions = this.#zones.suggest(token.text);
+      const known = this.#zones.names.map((name) => `"${name}"`).join(', ');
+      this.#fail(
+        token,
+        `unknown zone "${token.text}" — known zones are ${known}` +
+          (suggestions.length > 0 ? `. Did you mean ${suggestions.map((s) => `"${s}"`).join(' or ')}?` : ''),
+        'unknown-zone',
+      );
+      return null;
+    }
+    return resolved;
   }
 
   /**
@@ -661,7 +770,8 @@ class Parser {
   }
 
   #eventVerbList(): string {
-    return `try ${EVENT_VERBS.map((verb) => `"${verb}"`).join(', ')}`;
+    const verbs = [...EVENT_VERBS, 'enters <zone>', 'leaves <zone>'];
+    return `try ${verbs.map((verb) => `"${verb}"`).join(', ')}`;
   }
 
   /**

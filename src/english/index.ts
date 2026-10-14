@@ -49,6 +49,8 @@ export type { Suggestion, SuggestionKind } from './complete.js';
 export { completeAt, wordDoc } from './complete.js';
 export type { CompileOptions, CompileResult } from './compile.js';
 export { lowerDocument } from './lower.js';
+export type { RenderGap, RenderResult } from './render.js';
+export { GAP_MARKER, renderDocument } from './render.js';
 export {
   compileDocument,
   charsToString,
@@ -56,12 +58,63 @@ export {
   effectSummary,
   targetingSummary,
 } from './compile.js';
+export type {
+  CardKind,
+  CardKeyword,
+  CompiledCard,
+  CardCompileResult,
+  CardCompileOptions,
+} from './card.js';
+export {
+  compileCardDocument,
+  completeCardAt,
+  cardWordDoc,
+  CARD_WORD_DOCS,
+  CARD_LINE_STARTERS,
+} from './card.js';
+export {
+  ZoneDictionary,
+  emptyZoneDictionary,
+  ENGINE_ZONES,
+} from './zone-dictionary.js';
 export {
   BuffDictionary,
   emptyDictionary,
   slug,
   type DictionaryEntry,
 } from './dictionary.js';
+export {
+  BASIC_WORDS,
+  BUILTIN_KEYWORDS,
+  Glossary,
+  KeywordRegistry,
+  arityAccepts,
+  arityWords,
+  defaultKeywords,
+  keywordWritten,
+  splitKeywordArgs,
+  languageGlossary,
+  standardSources,
+  termKey,
+  type Annotated,
+  type GlossaryOptions,
+  type GlossaryScope,
+  type GlossarySource,
+  type GlossarySources,
+  type Glyph,
+  type DocSpan,
+  type KeywordDef,
+  type KeywordInvocation,
+  type KeywordParse,
+  type PermanentDef,
+  type Term,
+  type TermDefiner,
+  type TermFact,
+  type TermKind,
+  type TermRef,
+  type TermSeed,
+  type TermSpan,
+} from './glossary.js';
 export {
   DefinitionIndex,
   type DefinitionCandidate,

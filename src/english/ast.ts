@@ -88,6 +88,16 @@ export interface TriggerSentence {
    */
   readonly gauge?: string | { readonly kind: 'life' };
   readonly change?: 'damage' | 'heal';
+  /**
+   * For a **zone movement** (`zone:changed`): which zone the phrase names,
+   * and which end of the move that is.
+   *
+   * `when this enters play from active` — the entity is arriving in `play`,
+   * having come from `active`. A `leaves` phrase names the origin instead
+   * (`when this leaves play`). The opposite end is optional: without it the
+   * trigger fires no matter where the entity came from or went.
+   */
+  readonly zone?: ZonePhrase;
   /** Absent for a singular trigger, which has no count to check. */
   readonly count: CountPhrase | undefined;
   /** The triggering characters — the adjectives and filters. */
@@ -96,6 +106,18 @@ export interface TriggerSentence {
   readonly eventSpan: Span;
   /** What happens. */
   readonly effects: Sentence[];
+}
+
+/** The `enters <zone> [from <zone>]` / `leaves <zone> [to <zone>]` phrase. */
+export interface ZonePhrase {
+  /** `enters` matches the destination; `leaves` matches the origin. */
+  readonly verb: 'enters' | 'leaves';
+  /** The zone the phrase names (`play`), in the host's canonical spelling. */
+  readonly id: string;
+  /** The optional other end — `from <zone>` / `to <zone>`. */
+  readonly opposite?: string;
+  /** Span of the whole phrase, for hover help. */
+  readonly span: Span;
 }
 
 export interface ImportSection {
