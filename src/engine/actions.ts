@@ -32,6 +32,7 @@ import type { Character } from './character.js';
 import type { Action, ActionMap } from './contracts.js';
 import type { Entity, Zone, ZonePosition } from './zone.js';
 import type { EventSource } from './events.js';
+import type { Player } from './player.js';
 import type { GameEngine } from './engine.js';
 import { Gauge } from './gauge.js';
 import type { Buff, BuffDef, SkillDef, Status } from './status/index.js';
@@ -113,7 +114,7 @@ export interface RemoveBuffAction {
  * Destruction is **deferred to the SBA pass**: the action records a
  * pending-destroy marker and the pass resolves it together with every other
  * pending destruction (HP ≤ 0 deaths from the same batch, other `destroy`
- * actions) — so a "destroy all" spell's victims all land in the graveyard
+ * actions) — so a "destroy all" spell's victims all land in the garbage
  * at the same time. Characters that "cannot be destroyed" (see
  * `GameEngine.canDestroy` / restrictions) are skipped: the marker is
  * consumed and the character stays.
@@ -237,7 +238,7 @@ export type Actions = Action[];
  * and batches like every other action.
  *
  * `destroy` is the special case that keeps its own phase: it is deferred to
- * the settle so simultaneous deaths resolve together, and the graveyard
+ * the settle so simultaneous deaths resolve together, and the garbage
  * move it performs is this same transition.
  */
 export interface MoveAction {
@@ -259,6 +260,78 @@ export interface MoveAction {
    */
   readonly reason?: string;
   readonly source?: EventSource;
+  readonly direction?: ActionDirection;
+  readonly bypasses?: readonly string[];
+}
+
+/**
+ * **Reveal from the top of an ordered zone until a card is worth taking** — the
+ * shape Magic calls Discover and any costed card game can generalise.
+ *
+ * An *Action* rather than a bind-time loop on purpose. Binding is a pure
+ * function from an `EffectIR` to `Action[]`, and this mechanic is neither pure
+ * nor a single action: it reveals, **asks the player mid-resolution**, and then
+ * moves cards. Those are exactly the properties an action handler has
+ * (`ActionHandler` may be async, and `ctx.engine.ask` is the same route
+ * "you may …" already takes), so the loop lives here and the ability's compiled
+ * body stays a declarative list.
+ *
+ * ## Why there is a `revealed` zone
+ *
+ * The loop **moves** each card it looks at into a temporary zone rather than
+ * peeking at the top of the library. That is not an implementation detail:
+ * peeking changes nothing, so it announces no `zone:changed` and no trigger can
+ * see that a card was revealed. A reveal *is* a fact about the game — "when a
+ * card is revealed, …" has to be answerable — so the card genuinely leaves the
+ * library, sits somewhere visible for the rest of the resolution, and leaves
+ * that place when the resolution ends. It is the same holding-zone idea `active`
+ * already uses for a resolving spell.
+ *
+ * The ordering then falls out for free: every card that was looked at is already
+ * in one place, so "put the rest on the bottom in a random order" is a move of
+ * that zone's members rather than a list the handler has to remember.
+ *
+ * `maxCost` reads the entity's **`attributes`** — the game's own number, not an
+ * engine field. A card with no such fact reads 0, which matches; a game that
+ * needs to exclude uncosted cards declares a companion fact (a `land` flag) and
+ * tests it with a predicate.
+ */
+export interface DiscoverAction {
+  readonly type: 'discover';
+  /** The ordered zone revealed from (`'deck'`, `'library'`). */
+  readonly from: string;
+  /**
+   * The **temporary zone** a looked-at card waits in while the rest of the
+   * reveal resolves. Its members are what "the rest" means at the end, so it
+   * must be empty when a reveal begins.
+   */
+  readonly revealed: string;
+  /** How many to reveal before giving up — Magic's Discover number. */
+  readonly count: number;
+  /** An entity may be taken when its `cost` attribute is at most this. */
+  readonly maxCost: number;
+  /**
+   * A tested fact whose presence passes a card over — a `land` flag. Declared
+   * as a predicate over the revealed card's own `attributes`, so the engine
+   * gains no idea what a land is. A card that matches is revealed and put
+   * aside, never offered.
+   */
+  readonly skip?: ReadonlyMap<string, number | boolean>;
+  /** Where a taken entity goes. */
+  readonly to: string;
+  /** Where revealed-but-untaken entities go, shuffled. */
+  readonly rest: string;
+  /** Whose zones these are. Also the player asked to take. */
+  readonly owner?: Player;
+  readonly source?: EventSource;
+  readonly reason?: string;
+  /**
+   * The pipeline fields every action declares, so the engine's transformer pass
+   * can stamp them (`DeclaresActionBase` in `contracts.ts` enforces their
+   * *presence*, even where they are optional). Discover is initiated by its
+   * content rather than by a character, so it carries all three without
+   * pretending to be a targeted action.
+   */
   readonly direction?: ActionDirection;
   readonly bypasses?: readonly string[];
 }
@@ -598,4 +671,55 @@ export function transform(
  */
 export function popTransform(target: Character, source?: EventSource): PopTransformAction {
   return { type: 'popTransform', target, ...(source ? { source } : {}) };
+}
+
+/**
+ * **Discover** — reveal cards from the top of `from` into the `revealed` zone
+ * until one's `cost` fact is at most `maxCost`, offer that one, and put every
+ * card still in `revealed` on the bottom of `rest` in a random order.
+ *
+ * ```ts
+ * await engine.apply([discover({
+ *   from: 'deck', revealed: 'revealed', count: 3, maxCost: 2, to: 'play', rest: 'deck',
+ * })]);
+ * ```
+ */
+export function discover(options: {
+  readonly from: string;
+  /** The temporary holding zone; must be empty when the reveal begins. */
+  readonly revealed: string;
+  readonly count: number;
+  readonly maxCost: number;
+  readonly skip?: ReadonlyMap<string, number | boolean>;
+  readonly to: string;
+  readonly rest: string;
+  readonly owner?: Player;
+  readonly source?: EventSource;
+  readonly reason?: string;
+}): DiscoverAction {
+  if (!Number.isInteger(options.count) || options.count < 1) {
+    throw new Error(`discover: count must be a positive integer, got ${options.count}`);
+  }
+  if (!Number.isFinite(options.maxCost)) {
+    throw new Error(`discover: maxCost must be a finite number, got ${options.maxCost}`);
+  }
+  if (options.revealed === options.to || options.revealed === options.from) {
+    throw new Error(
+      `discover: the revealed zone must be its own place — got "${options.revealed}" for ` +
+        `from="${options.from}" / to="${options.to}"`,
+    );
+  }
+  return {
+    type: 'discover',
+    from: options.from,
+    revealed: options.revealed,
+    count: options.count,
+    maxCost: options.maxCost,
+    ...(options.skip && options.skip.size > 0 ? { skip: options.skip } : {}),
+    to: options.to,
+    rest: options.rest,
+    ...(options.owner ? { owner: options.owner } : {}),
+    ...(options.source ? { source: options.source } : {}),
+    ...(options.reason ? { reason: options.reason } : {}),
+  };
 }

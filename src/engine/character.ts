@@ -160,6 +160,14 @@ export class Character {
   readonly type = 'character' as const;
 
   /**
+   * Game-declared numeric facts about this character (`Entity.attributes`): a
+   * card's mana cost, a crew rating, a land flag. The engine reads them only
+   * when content asks — it assigns no meaning to any name — and a game stamps
+   * them at construction, the way the card game stamps a permanent's `cost`.
+   */
+  attributes: ReadonlyMap<string, number> | undefined;
+
+  /**
    * The character's current name — part of the **form**: a `transform`
    * action swaps it (reverting when the transform's source buff is
    * removed). The original name is kept in `#baseName` for the revert.
@@ -173,7 +181,7 @@ export class Character {
   team: string | undefined;
 
   /**
-   * Whether the character has been **destroyed** (moved to the graveyard by
+   * Whether the character has been **destroyed** (moved to the garbage by
    * the engine's destroy phase). Distinct from `isDefeated`, which is
    * HP-derived — a character destroyed by an explicit `destroy` action may
    * still have full HP. Set by the engine; cleared by a future revive.

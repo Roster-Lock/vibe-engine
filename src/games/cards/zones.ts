@@ -21,7 +21,7 @@
  * Add the group when the zone is declared; retrofitting it once content
  * references bare zone names is expensive.
  */
-import { GRAVEYARD, PLAY, type ZoneDef } from '../../engine/index.js';
+import { GARBAGE, PLAY, type ZoneDef } from '../../engine/index.js';
 
 /** A player's library. Ordered, and hidden **even from its owner**. */
 export const DECK: ZoneDef = {
@@ -77,14 +77,37 @@ export const ACTIVE: ZoneDef = {
   capacity: 1,
 };
 
+
 /**
- * The game's zones. `play` and `graveyard` are the engine's own built-ins,
+ * **Where a revealed card waits while the reveal resolves** — the holding zone
+ * a "reveal until …" effect needs.
+ *
+ * It exists because a reveal is a *fact about the game*: the card has genuinely
+ * left the library and is visible, so `zone:changed` fires and "when a card is
+ * revealed, …" is answerable. A peek that never moved anything could not be
+ * observed by any other effect.
+ *
+ * Shared rather than per-player (the reveal is public either way), unordered
+ * (nothing reads a position inside a reveal), and outside the `removed` family —
+ * a card here is mid-resolution, not gone. It must be **empty when a reveal
+ * begins**: its members are what "the rest" means when the reveal ends.
+ */
+export const REVEALED: ZoneDef = {
+  id: 'revealed',
+  visibility: 'public',
+  group: 'resolving',
+};
+
+/**
+ * The game's zones. `play` and `garbage` are the engine's own built-ins,
  * listed so one array describes the whole game.
  *
- * **Open:** the game wants a *per-player* garbage pile, but the engine's
- * `graveyard` is shared — `destroy` has no notion of whose pile a dying
- * thing belongs in. Making it per-player means teaching the destroy path
- * about ownership, which is its own change; until then `graveyard` is the
- * one shared pile.
+ * `garbage` is per-player and is **both** piles in one: a destroyed
+ * permanent lands in its controller's garbage and so does a resolved spell.
+ * There is no separate discard, because "what died" and "what was cast" are
+ * questions about the same pile, and a second one only forced every reader
+ * to tell two removed zones apart.
  */
-export const CARD_ZONES: readonly ZoneDef[] = [DECK, HAND, STACK, ACTIVE, PLAY, GRAVEYARD];
+export const CARD_ZONES: readonly ZoneDef[] = [DECK, HAND, STACK, ACTIVE, REVEALED, PLAY, GARBAGE];
+
+export { GARBAGE };

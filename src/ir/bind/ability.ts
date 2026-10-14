@@ -22,6 +22,7 @@ import {
   cast,
   damage,
   destroy,
+  discover,
   heal,
   gaugeDelta,
   gaugeTransformCtx,
@@ -70,6 +71,18 @@ export interface BindOptions {
    * already reported the unknown name as a diagnostic.
    */
   readonly resolveBuff: (name: string) => BuffDef | undefined;
+  /**
+   * Maps an **abstract zone name** in the IR to the zone a game declared —
+   * `{ library: 'deck', board: 'play' }`.
+   *
+   * The IR cannot name a zone directly: it is the share format, and a document
+   * has to mean the same thing in a game whose library is `deck` and one whose
+   * library is `pile`. So content writes the role (`library`) and the host
+   * answers with its own id. An unmapped name passes through unchanged, so
+   * content that *is* written against a particular game's ids still works — and
+   * a missing zone is the game's error, reported by the engine.
+   */
+  readonly aliases?: Readonly<Record<string, string>>;
 }
 
 export interface BindResult {
@@ -167,6 +180,12 @@ function valueOf(value: ValueIR, ctx: ResolveContext, options: BindOptions): num
       const entity = value.of ? resolveQuery(value.of, ctx, options)[0] : ctx.subject;
       const gauge = entity?.gauges.find((g) => g.id === value.gauge);
       return gauge?.current ?? 0;
+    }
+    case 'attribute': {
+      const entity = value.of ? resolveQuery(value.of, ctx, options)[0] : ctx.subject;
+      // Absent reads 0, like an absent gauge — content shared between games
+      // should narrow rather than break.
+      return entity?.attributes?.get(value.attribute) ?? 0;
     }
     case 'expr':
       // The formula escape hatch. Its context mirrors what the declarative
@@ -323,12 +342,42 @@ function effectActions(effect: EffectIR, ctx: ResolveContext, options: BindOptio
     return ctx.engine.players.map((player) => action(player, ctx.self));
   }
 
+  // Discover is an action rather than a loop here: `effectActions` is pure
+  // (effect → actions), and this mechanic peeks, asks the player, and moves
+  // cards. The zone roles are resolved through the host's aliases so the IR
+  // never names a game's zones.
+  if (effect.kind === 'discover') {
+    const zone = (role: string): string => options.aliases?.[role] ?? role;
+    // The skip test compiles into the **facts** that make it true, so the
+    // engine never learns what a land is: it compares a map it was handed
+    // against a card's declared attributes. A test it cannot reduce this way
+    // (anything not a plain attribute comparison) is simply not applied — the
+    // cost ceiling still governs — rather than throwing mid-resolution.
+    const skip = skipFacts(effect.skip);
+    return [
+      discover({
+        from: zone(effect.from),
+        revealed: zone(effect.revealed),
+        to: zone(effect.to),
+        rest: zone(effect.rest),
+        count: Math.max(1, Math.floor(valueOf(effect.count, ctx, options))),
+        maxCost: valueOf(effect.maxCost, ctx, options),
+        ...(skip ? { skip } : {}),
+        source: ctx.self,
+      }),
+    ];
+  }
+
   const entities = resolveQuery(effect.query, ctx, options);
   const actions: Action[] = [];
   switch (effect.kind) {
     case 'gauge': {
-      const amount = valueOf(effect.amount, ctx, options);
       for (const c of entities) {
+        // The amount is evaluated **with the entity in scope** — "deal damage
+        // equal to this character's toughness" is a per-entity amount, and a
+        // scopeless `ValueIR` (a bare `gauge`, or an `attribute`) reads the
+        // subject. Evaluating once outside the loop silently read 0.
+        const amount = valueOf(effect.amount, { ...ctx, subject: c }, options);
         // Resolved per entity: the same `Deal 5 damage to all characters`
         // moves hp on one and loyalty on another, each by its own
         // declaration.
@@ -370,6 +419,36 @@ function effectActions(effect: EffectIR, ctx: ResolveContext, options: BindOptio
     }
   }
   return actions;
+}
+
+/**
+ * The attribute facts that make a `skip` predicate true, or `undefined` when it
+ * is not a plain conjunction of attribute comparisons.
+ *
+ * The reduction is what keeps the engine generic: `land = 1` becomes
+ * `{ land: 1 }`, and the discover loop only has to ask "does this entity declare
+ * these facts". A predicate over anything else is not something a revealed card
+ * can be tested against anyway (there is no board context mid-reveal), so it is
+ * dropped rather than guessed at.
+ *
+ * This same reduction is what `PredicateIR` will use to filter an **action**;
+ * it lives here because the reveal is the first effect that needed it.
+ */
+export function skipFacts(
+  predicate: PredicateIR | undefined,
+): ReadonlyMap<string, number | boolean> | undefined {
+  if (!predicate) return undefined;
+  const facts = new Map<string, number | boolean>();
+  const collect = (node: PredicateIR): boolean => {
+    if (node.kind === 'and') return node.clauses.every(collect);
+    if (node.kind !== 'compare' || node.op !== '=') return false;
+    const attribute = node.left.kind === 'attribute' ? node.left.attribute : undefined;
+    const value = node.right.kind === 'const' ? node.right.value : undefined;
+    if (attribute === undefined || value === undefined) return false;
+    facts.set(attribute, value);
+    return true;
+  };
+  return collect(predicate) && facts.size > 0 ? facts : undefined;
 }
 
 /** One step's actions — empty when its `when` predicate does not hold. */
@@ -658,7 +737,12 @@ function bindingOf(event: unknown, sourceType: 'character' | 'buff' = 'character
   const subjects: Character[] = [];
   const sources: Character[] = [];
   const single = (e: Record<string, unknown>): void => {
-    const subject = (e.character ?? (e.target as unknown)) as Character | undefined;
+    // `character` is the destruction/gauge subject; `entity` is the thing
+    // that moved in a `zone:changed` — only a character can be filtered,
+    // counted or targeted by the language, so a card in a deck is ignored.
+    const subject = (e.character ??
+      (e.target as unknown) ??
+      (e.entity instanceof Character ? e.entity : undefined)) as Character | undefined;
     if (subject) subjects.push(subject);
     const source = e.source as { type?: string } | undefined;
     if (source && source.type === sourceType) sources.push(source as unknown as Character);
@@ -713,6 +797,21 @@ export function bindTrigger(ir: TriggerIR, options: BindOptions): AnyTriggeredAb
    * from the event's own `from`/`to`.
    */
   const changeMatches = (individual: unknown): boolean => {
+    // A zone movement is matched by its two ends: `enters <zone>` reads the
+    // destination, `leaves <zone>` the origin, and the optional opposite end
+    // pins the other side of the move. A first placement has no `from`, so
+    // an unqualified `enters play` fires for it too — that is what "no
+    // matter where the previous zone was" means.
+    if (ir.zone) {
+      const event = individual as { from?: { id?: string }; to?: { id?: string } };
+      const near = ir.zone.verb === 'enters' ? event.to?.id : event.from?.id;
+      if (near !== ir.zone.id) return false;
+      if (ir.zone.opposite !== undefined) {
+        const far = ir.zone.verb === 'enters' ? event.from?.id : event.to?.id;
+        if (far !== ir.zone.opposite) return false;
+      }
+      return true;
+    }
     if (ir.gauge === undefined && ir.change === undefined) return true;
     const event = individual as {
       gauge?: { id?: string };

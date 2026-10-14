@@ -126,7 +126,7 @@ async function stageDirectDestroy(): Promise<void> {
   await engine.useAbility(lich, voidBolt, { targets: [goblin] });
 
   console.log(`  → goblin destroyed: ${goblin.destroyed} | in graveyard: ${!engine.isInPlay(goblin)}`);
-  console.log(`  → graveyard: ${engine.graveyard.map((c) => c.name).join(', ') || '(empty)'}`);
+  console.log(`  → graveyard: ${engine.garbage.map((c) => c.name).join(', ') || '(empty)'}`);
   console.log(
     `  → Lich can still target: ${engine.validTargets({ who: 'enemy' }, lich).map((c) => c.name).join(', ')}` +
       '  (corpses are never targetable)',

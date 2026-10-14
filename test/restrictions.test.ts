@@ -311,7 +311,7 @@ describe('win/lose gates (on: "lose" / on: "win")', () => {
     // party cannot be judged lost while its character says so.
     await engine.damage(hero.gauge('hp'), 999, goblin); // must not throw GameEndInterrupt
     expect(hero.destroyed).toBe(true);
-    expect(engine.graveyard).toContain(hero);
+    expect(engine.garbage).toContain(hero);
 
     // An explicit lose action is blocked the same way.
     await engine.apply([lose('party')]); // must not throw GameEndInterrupt

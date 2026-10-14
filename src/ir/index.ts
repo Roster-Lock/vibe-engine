@@ -45,6 +45,7 @@ export type {
   ModifierIR,
   BuffIR,
   TriggerIR,
+  TriggerZoneIR,
   TriggerScope,
   TriggerMode,
   RepeatIR,

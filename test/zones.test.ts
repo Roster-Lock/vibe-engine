@@ -1,7 +1,7 @@
 /**
  * Zones (src/engine/zone.ts, docs/design/15-zones.md).
  *
- * The engine's `play` and `graveyard` are no longer two `Set<Character>`
+ * The engine's `play` and `garbage` are no longer two `Set<Character>`
  * fields — they are ordinary declared zones in one registry, and a game
  * declares its own alongside them. These tests cover the registry's
  * invariant (every registered entity is in exactly one zone), the
@@ -26,7 +26,7 @@ import {
   type GameEvent,
 } from '../src/games/turn-based/index.js';
 import { isDeath, leftPlay } from '../src/games/turn-based/index.js';
-import { ACTIVE, CARD_ZONES, DECK, HAND, STACK } from '../src/games/cards/zones.js';
+import { ACTIVE, CARD_ZONES, DECK, HAND, REVEALED, STACK } from '../src/games/cards/zones.js';
 import { createEngine } from '../src/games/turn-based/index.js';
 
 class Idle extends Player {
@@ -40,11 +40,11 @@ const char = (name: string, maxHp = 100): Character => new Character(name, { max
 /* ------------------------------ the registry --------------------------- */
 
 describe('ZoneRegistry', () => {
-  it('ships play and graveyard declared', () => {
+  it('ships play and garbage declared', () => {
     const registry = new ZoneRegistry();
     expect(registry.zone('play')?.targetable).toBe(true);
-    expect(registry.zone('graveyard')?.targetable).toBe(false);
-    expect(registry.zone('graveyard')?.group).toBe('removed');
+    expect(registry.unownedZone('garbage')?.targetable).toBe(false);
+    expect(registry.unownedZone('garbage')?.group).toBe('removed');
   });
 
   it('keeps every entity in exactly one zone', () => {
@@ -54,17 +54,17 @@ describe('ZoneRegistry', () => {
     expect(registry.zoneOf(a)?.id).toBe('play');
     expect(registry.members('play')).toEqual([a]);
 
-    registry.move(a, registry.zone('graveyard')!);
-    expect(registry.zoneOf(a)?.id).toBe('graveyard');
+    registry.move(a, registry.unownedZone('garbage')!);
+    expect(registry.zoneOf(a)?.id).toBe('garbage');
     expect(registry.members('play')).toEqual([]);
-    expect(registry.members('graveyard')).toEqual([a]);
+    expect(registry.unownedZone('garbage')!.members).toEqual([a]);
   });
 
   it('preserves registration order independently of zone membership', () => {
     const registry = new ZoneRegistry();
     const [a, b, c] = [char('A'), char('B'), char('C')];
     for (const entity of [a, b, c]) registry.add(entity, registry.zone('play')!);
-    registry.move(a, registry.zone('graveyard')!);
+    registry.move(a, registry.unownedZone('garbage')!);
     registry.move(a, registry.zone('play')!);
     // A went out and came back; `entities` is still registration order,
     // which trigger ordering and target-pool order depend on.
@@ -138,11 +138,14 @@ describe('declared zones', () => {
 
   it('groups zones into families so generic references stay possible', () => {
     const r = registry();
-    // "anything waiting to resolve or resolving" — without a group, content
-    // would have to enumerate zone names it cannot know about.
-    expect(r.group('resolving').map((z) => z.id).sort()).toEqual(['active', 'stack']);
+    // "anything waiting to resolve, resolving, or revealed while it resolves" —
+    // without a group, content would have to enumerate zone names it cannot
+    // know about. `revealed` joined the family because a card held mid-reveal
+    // is exactly that: in the middle of resolving, and not yet anywhere.
+    expect(r.group('resolving').map((z) => z.id).sort()).toEqual(['active', 'revealed', 'stack']);
     expect(STACK.group).toBe('resolving');
     expect(ACTIVE.group).toBe('resolving');
+    expect(REVEALED.group).toBe('resolving');
     expect(HAND.group).toBe('hand');
   });
 });
@@ -172,12 +175,12 @@ describe('zones on the engine', () => {
     expect(engine.isInPlay(hero)).toBe(true);
   });
 
-  it('destroy is a move to the graveyard, and announces both events', async () => {
+  it('destroy is a move to the garbage, and announces both events', async () => {
     const { engine, foe, events } = arena();
     await engine.apply([damage(foe.gauge('hp'), 10)]);
 
-    expect(engine.zones.zoneOf(foe)?.id).toBe('graveyard');
-    expect(engine.graveyard).toEqual([foe]);
+    expect(engine.zones.zoneOf(foe)?.id).toBe('garbage');
+    expect(engine.garbage).toEqual([foe]);
     expect(engine.isInPlay(foe)).toBe(false);
 
     const zoneChange = events.find(
@@ -185,7 +188,7 @@ describe('zones on the engine', () => {
     );
     expect(zoneChange).toBeDefined();
     expect(zoneChange && 'from' in zoneChange ? zoneChange.from.id : undefined).toBe('play');
-    expect(zoneChange?.to.id).toBe('graveyard');
+    expect(zoneChange?.to.id).toBe('garbage');
     // The mechanical transition and the death are separate announcements:
     // "left play" and "died" are different questions.
     expect(events.some((e) => e.type === 'character:destroyed')).toBe(true);
@@ -207,8 +210,8 @@ describe('zones on the engine', () => {
     expect(engine.isInPlay(foe)).toBe(false);
     // ...and `include` cannot drag it back, since the zone is the gate.
     expect(engine.validTargets({ who: 'any', count: 1, include: [foe] }, hero)).not.toContain(foe);
-    // Leaving play is neutral for defeat: only the graveyard is death.
-    expect(engine.graveyard).not.toContain(foe);
+    // Leaving play is neutral for defeat: only the garbage is death.
+    expect(engine.garbage).not.toContain(foe);
   });
 
   it('moveTo throws for an unknown zone rather than silently doing nothing', async () => {
@@ -237,7 +240,7 @@ describe('dying is leaving play for the garbage pile', () => {
     return { engine, hero, foe, bystander, events };
   }
 
-  it('a destroy is a death: out of play, into the graveyard', async () => {
+  it('a destroy is a death: out of play, into the garbage', async () => {
     const { engine, foe, events } = arena();
     await engine.apply([damage(foe.gauge('hp'), 10)]);
     const deaths = events.filter(isDeath);
@@ -267,11 +270,11 @@ describe('dying is leaving play for the garbage pile', () => {
     expect(events.filter(isDeath)).toHaveLength(0);
   });
 
-  it('a discard from hand reaches the graveyard without dying', async () => {
+  it('a discard from hand reaches the garbage without dying', async () => {
     const { engine, bystander, events } = arena();
     await engine.moveTo(bystander, 'hand', { owner: engine.players[1] });
     events.length = 0;
-    await engine.moveTo(bystander, 'graveyard');
+    await engine.moveTo(bystander, 'garbage');
     expect(events.filter(isDeath)).toHaveLength(0);
     expect(events.filter(leftPlay)).toHaveLength(0);
   });
@@ -295,8 +298,8 @@ describe('move as an action', () => {
 
   it('batches several moves into one zone:changed:batch', async () => {
     const { engine, hero, token, events } = arena();
-    const graveyard = engine.zones.zone('graveyard')!;
-    await engine.apply([move(hero, graveyard), move(token, graveyard)]);
+    const garbage = engine.zones.zone('garbage', hero.controller!)!;
+    await engine.apply([move(hero, garbage), move(token, garbage)]);
     expect(events.filter((e) => e.type === 'zone:changed')).toHaveLength(2);
     expect(events.filter((e) => e.type === 'zone:changed:batch')).toHaveLength(1);
   });
@@ -316,14 +319,14 @@ describe('move as an action', () => {
           passiveActionModifier({
             name: 'Suspend Instead',
             transform: (action) =>
-              action.type === 'move' && action.to.id === 'graveyard' ? { ...action, to: suspended } : action,
+              action.type === 'move' && action.to.id === 'garbage' ? { ...action, to: suspended } : action,
           }),
         ],
       }),
     );
-    await engine.moveTo(token, 'graveyard');
+    await engine.moveTo(token, 'garbage');
     expect(engine.zones.zoneOf(token)?.id).toBe('suspended');
-    expect(engine.graveyard).not.toContain(token);
+    expect(engine.garbage).not.toContain(token);
   });
 
   it('an on-move restriction blocks it outright, rather than redirecting', async () => {
@@ -336,7 +339,7 @@ describe('move as an action', () => {
         abilities: [restriction({ name: 'Rooted', on: 'move' })],
       }),
     );
-    await engine.moveTo(token, 'graveyard');
+    await engine.moveTo(token, 'garbage');
     expect(engine.zones.zoneOf(token)?.id).toBe('play');
   });
 });
@@ -400,7 +403,7 @@ describe('gauge values are realized on entering play', () => {
     expect(engine.zones.zoneOf(veteran)?.id).toBe('play');
   });
 
-  it('a revive from the graveyard arrives at full', async () => {
+  it('a revive from the garbage arrives at full', async () => {
     const { engine, minion } = arena();
     await engine.apply([damage(minion.gauge('hp'), 30)]);
     expect(engine.isInPlay(minion)).toBe(false);

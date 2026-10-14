@@ -28,7 +28,7 @@
  * ```
  */
 import type { Ability, StatContext, TargetPattern, Targeting } from './ability/index.js';
-import type { Action, ActionDirection, ActionTransformer, GaugeAction, TransformForm } from './actions.js';
+import type { Action, ActionDirection, ActionTransformer, DiscoverAction, GaugeAction, TransformForm } from './actions.js';
 import { ActionRegistry } from './action-registry.js';
 import type { TargetWho } from './contracts.js';
 import { OutcomeRegistry } from './outcome.js';
@@ -49,7 +49,7 @@ import type {
   ZoneChangedEvent,
 } from './events.js';
 import { Gauge, type GaugeSba } from './gauge.js';
-import { IN_PLAY, ZoneRegistry, type Entity, type Zone, type ZonePosition, type ZoneTransition } from './zone.js';
+import { GARBAGE, IN_PLAY, ZoneRegistry, type Entity, type Zone, type ZonePosition, type ZoneTransition } from './zone.js';
 export type { GaugeSba } from './gauge.js';
 export type { DeferredTrigger } from './trigger-stack.js';
 export {
@@ -237,15 +237,13 @@ export class GameEngine {
 
   /**
    * Zones, and which zone every registered entity is in (zone.ts). Replaces
-   * the two `Set<Character>` fields this used to be — `play` and `graveyard`
+   * the two `Set<Character>` fields this used to be — `play` and `garbage`
    * are now ordinary declared zones, so a game can add its own alongside
    * them and one mechanism governs all of them.
    */
   readonly #zones = new ZoneRegistry();
   /** The `play` zone instance — where a registered character starts. */
   readonly #play: Zone;
-  /** The `graveyard` zone instance — where `destroy` sends things. */
-  readonly #graveyardZone: Zone;
 
   /**
    * Moves an entity between zones and **collects** the transition for
@@ -347,6 +345,39 @@ export class GameEngine {
   }
 
   /**
+   * **Looks at the top of an ordered zone without moving anything** — the peek
+   * a reveal mechanic needs.
+   *
+   * The engine had no way to do this, which is why "look at the top card of
+   * your library" was inexpressible: a move was the only way anything left a
+   * deck, so every look was also a take. A peek is not a move — nothing changes
+   * zone, so **nothing is announced and no trigger fires**, the same reasoning
+   * `ZoneRegistry.shuffle` already records. If content wants an event, it moves
+   * the card afterwards and gets one.
+   *
+   * Returns `undefined` for a zone that does not exist, is empty, or is
+   * **unordered** — a bag has no top, and inventing one (the first member, the
+   * last) would be a silent lie about which card was seen.
+   */
+  reveal(zoneId: string, owner?: Player): Entity | undefined {
+    const zone = owner ? this.#zones.zone(zoneId, owner) : this.#zones.unownedZone(zoneId);
+    return zone?.ordered ? zone.top : undefined;
+  }
+
+  /**
+   * Shuffles an ordered zone with the game's seeded PRNG.
+   *
+   * Public because content needs it and only the game knows when: "the rest on
+   * the bottom in a random order" is a shuffle, and it belongs to the effect
+   * that wrote it rather than to a hidden helper. Announces nothing, for the
+   * reason on `ZoneRegistry.shuffle` — no player learns the order.
+   */
+  shuffleZone(zoneId: string, owner?: Player): void {
+    const zone = owner ? this.#zones.zone(zoneId, owner) : this.#zones.unownedZone(zoneId);
+    if (zone) this.#zones.shuffle(zone, () => this.random());
+  }
+
+  /**
    * Moves an entity to a zone by id (a per-player zone needs its `owner`) —
    * the game-facing verb for a draw, a discard, a bounce.
    *
@@ -359,7 +390,10 @@ export class GameEngine {
     zoneId: string,
     options: { owner?: Player; position?: ZonePosition; reason?: string; source?: EventSource } = {},
   ): Promise<void> {
-    const zone = this.#zones.zone(zoneId, options.owner);
+    // A `per-player` zone is resolved through the entity: a character's
+    // controller owns the pile it lands in, so a caller does not have to
+    // repeat what the entity already knows. An explicit owner still wins.
+    const zone = this.#zoneFor(entity, zoneId, options.owner);
     if (!zone) throw new Error(`moveTo: no zone "${zoneId}"${options.owner ? ` for ${options.owner.name}` : ''}`);
     await this.apply(
       [
@@ -414,9 +448,37 @@ export class GameEngine {
     return answer;
   }
 
-  /** True when a character has been moved to the graveyard (i.e. is dead). */
-  #inGraveyard(character: Character): boolean {
-    return this.#zones.zoneOf(character) === this.#graveyardZone;
+  /**
+   * **The garbage pile a thing belongs to** — the one owned by its
+   * controller, or the ownerless pile when it has none.
+   *
+   * This is the ownership the destroy path used to lack: `graveyard` was one
+   * shared `Set`, so "whose pile is this" was unanswerable. Resolving it per
+   * entity is what makes a per-player garbage zone work without teaching
+   * every reader who owns what.
+   */
+  #garbageFor(entity: Entity): Zone {
+    const zone = this.#zoneFor(entity, GARBAGE.id);
+    if (!zone) throw new Error(`GameEngine: no "${GARBAGE.id}" zone`);
+    return zone;
+  }
+
+  /**
+   * The instance of `zoneId` an entity belongs in: the one owned by its
+   * controller, or the ownerless pile when it has none. An explicit owner
+   * always wins (moving something into another player's zone is a real
+   * thing to do).
+   */
+  #zoneFor(entity: Entity, zoneId: string, owner?: Player): Zone | undefined {
+    const resolved = owner ?? (entity instanceof Character ? entity.controller : undefined);
+    return resolved
+      ? this.#zones.zone(zoneId, resolved)
+      : this.#zones.unownedZone(zoneId);
+  }
+
+  /** True when a character has been moved to a garbage pile (i.e. is dead). */
+  #inGarbage(character: Character): boolean {
+    return this.#zones.zoneOf(character)?.id === GARBAGE.id;
   }
 
   /**
@@ -487,7 +549,6 @@ export class GameEngine {
 
   constructor(options: EngineOptions = {}) {
     this.#play = this.#zones.zone('play')!;
-    this.#graveyardZone = this.#zones.zone('graveyard')!;
     this.#chooser = options.chooser ?? new AutoChooser();
     this.#onEvent = options.onEvent;
     this.#maxDepth = options.maxActionDepth ?? 100;
@@ -524,10 +585,31 @@ export class GameEngine {
 
   /* ------------------------- registration ------------------------- */
 
-  /** Registers a character: skills are attached and their abilities armed. */
-  registerCharacter(character: Character): this {
+  /**
+   * Registers a character: skills are attached and their abilities armed.
+   *
+   * `options.zone` is where it lands — `play` by default, or a game's own
+   * zone to **stage** it out of play (a card resolving in `active`, a
+   * permanent about to be cheated in from the `stack`). Placement is silent,
+   * like registration: it announces nothing, so the `zone:changed` event
+   * belongs to the `moveTo` that follows and carries a real `from` — which
+   * is what makes `when this enters play from active` expressible.
+   */
+  registerCharacter(
+    character: Character,
+    options: { zone?: string; owner?: Player; position?: ZonePosition } = {},
+  ): this {
     if (this.#zones.has(character)) return this;
-    this.#zones.add(character, this.#play);
+    const zone =
+      options.zone === undefined
+        ? this.#play
+        : this.#zones.zone(options.zone, options.owner);
+    if (!zone) {
+      throw new Error(
+        `registerCharacter: no zone "${options.zone}"${options.owner ? ` for ${options.owner.name}` : ''}`,
+      );
+    }
+    this.#zones.add(character, zone, options.position);
     for (const status of character.statuses) {
       this.#stack.attachStatus(status, character);
     }
@@ -540,7 +622,7 @@ export class GameEngine {
     // registration order (and a mid-game registration takes effect
     // immediately; the next settle's refresh keeps it current).
     for (const other of this.#chars()) {
-      if (other === character || this.#inGraveyard(other)) continue;
+      if (other === character || this.#inGarbage(other)) continue;
       for (const gauge of this.#functionGauges(other)) {
         this.#refreshGaugeSilent(other, gauge);
       }
@@ -1261,7 +1343,7 @@ export class GameEngine {
    * removals must not emit noise.
    */
   async #refreshStat(character: Character, name: string, source?: EventSource): Promise<void> {
-    if (this.#inGraveyard(character)) return;
+    if (this.#inGarbage(character)) return;
     const from = character.stat(name);
     const to = this.#statValue(character, name);
     if (to === from) return;
@@ -1334,7 +1416,7 @@ export class GameEngine {
     if (this.#stateVersion === this.#lastStatRefreshVersion) return;
     this.#lastStatRefreshVersion = this.#stateVersion;
     for (const character of this.#chars()) {
-      if (this.#inGraveyard(character)) continue;
+      if (this.#inGarbage(character)) continue;
       for (const gauge of this.#functionGauges(character)) {
         await this.#recomputeMax(character, gauge);
       }
@@ -1379,7 +1461,7 @@ export class GameEngine {
    * their gauges are moot and on-defeat removals must not emit noise.
    */
   async #recomputeMax(character: Character, gauge: Gauge, source?: EventSource): Promise<void> {
-    if (this.#inGraveyard(character)) return;
+    if (this.#inGarbage(character)) return;
     const from = gauge.max;
     const to = this.#gaugeMax(character, gauge);
     if (to === from) return;
@@ -1405,9 +1487,21 @@ export class GameEngine {
     }
   }
 
-  /** Destroyed characters — the graveyard zone (never targetable). */
-  get graveyard(): Character[] {
-    return this.#graveyardZone.of<Character>('character');
+  /**
+   * Destroyed characters, across every garbage pile.
+   *
+   * A game with per-player piles usually wants one player's — use
+   * `garbageOf(player)` for that. This is the whole table, for the many
+   * questions that are about death rather than ownership ("has anything
+   * died yet", a defeat check).
+   */
+  get garbage(): Character[] {
+    return this.#zones.instancesOf(GARBAGE.id).flatMap((zone) => zone.of<Character>('character'));
+  }
+
+  /** One player's garbage pile, in the order things landed there. */
+  garbageOf(player: Player): Character[] {
+    return this.#zones.zone(GARBAGE.id, player)?.of<Character>('character') ?? [];
   }
 
   /** True when a character is registered and not destroyed. */
@@ -1743,6 +1837,109 @@ export class GameEngine {
         const pop = target.popTopTransform();
         if (pop) await this.#finishFormPop(target, pop, ctx.source);
       }, { subject: (action) => action.target })
+      .register('discover', (action) => this.#discover(action))
+  }
+
+  /**
+   * **Reveal until a card is worth taking** — the body of the `discover`
+   * action.
+   *
+   * The mechanic is five sub-behaviours and every one of them is where a naive
+   * implementation goes wrong, so each is worth naming:
+   *
+   * 1. **Peek, do not take.** `reveal` reads the top without moving it, so a
+   *    card that gets declined was never announced as leaving and re-entering
+   *    the deck — no trigger fires for a look.
+   * 2. **Stop at the first match, not the best.** Magic's Discover offers the
+   *    *first* card within the cost, and the loop must not keep revealing once
+   *    it has one: the rest of the deck is left alone.
+   * 3. **Ask, do not take.** The card is *offered*; a take moves it, a decline
+   *    bottoms it and the loop continues. That is `ask`, so a scripted player,
+   *    a remote client and the auto-chooser all work without a second path.
+   * 4. **Bottom, then shuffle.** The revealed-but-untaken cards are put on the
+   *    bottom **oldest first** (so their relative order is what it was) and the
+   *    zone is shuffled once at the end. Shuffling per card would be fine and
+   *    wasteful; moving them in reverse would silently reverse a deck.
+   * 5. **Nothing found is normal.** Reaching `count` without a match bottoms
+   *    the reveals and stops. It is not an error and not an infinite loop.
+   */
+  async #discover(action: DiscoverAction): Promise<void> {
+    // Whose zones these are, and therefore **who is asked**. An explicit owner
+    // wins — content may discover on another player's library — and otherwise
+    // it is whoever is responsible for the action.
+    const owner = action.owner ?? casterOf(action.source)?.controller;
+    const reason = action.reason ?? 'discover';
+    // `maxCost` is read through the entity's own `attributes`, so the engine
+    // never learns what a cost is — only that a game declared one.
+    // A **number** fact, because a cost is compared with `<=`: a boolean fact
+    // (a land flag) is a different question, and coercing it to 1 would make
+    // "is this a land" indistinguishable from "is its cost 1". A card with no
+    // cost at all reads 0, which matches.
+    const costOf = (entity: Entity): number => {
+      const value = entity.attributes?.get('cost');
+      return typeof value === 'number' ? value : 0;
+    };
+    const affordable = (entity: Entity): boolean => costOf(entity) <= action.maxCost;
+    // A skipped card is revealed and put aside, never offered — "or a land".
+    // The facts were compiled from the effect's own predicate, so the engine
+    // compares a map against declared attributes and learns nothing. A
+    // boolean fact must be declared as one, or it will not match here.
+    const passes = (entity: Entity): boolean => {
+      if (!action.skip) return false;
+      for (const [fact, value] of action.skip) {
+        if ((entity.attributes?.get(fact) ?? 0) !== value) return false;
+      }
+      return true;
+    };
+
+    const library = owner ? this.#zones.zone(action.from, owner) : this.#zones.unownedZone(action.from);
+    if (!library?.ordered) return;
+
+    // **Reveal into the holding zone, one at a time.** Moving each card rather
+    // than peeking is what makes the reveal observable: a `zone:changed` fires,
+    // so "when a card is revealed" is a question the game can ask. It also means
+    // the loop always looks at the *current* top, so it cannot re-examine a card
+    // it already put aside.
+    for (let looked = 0; looked < action.count; looked += 1) {
+      const top = library.members[0];
+      if (!top) break;
+      await this.moveTo(top, action.revealed, {
+        ...(owner ? { owner } : {}),
+        ...(action.source ? { source: action.source } : {}),
+        reason,
+      });
+      if (!affordable(top) || passes(top)) continue;
+
+      const answer = await this.ask({
+        kind: 'confirm',
+        prompt: `Put ${top.name} into play?`,
+        chooser: owner,
+      });
+      if (answer.kind === 'confirm' && answer.yes) {
+        await this.moveTo(top, action.to, {
+          ...(owner ? { owner } : {}),
+          ...(action.source ? { source: action.source } : {}),
+          reason,
+        });
+        break;
+      }
+    }
+
+    // Whatever is still waiting in the holding zone is "the rest". Reading it
+    // from the zone rather than from a list is the point of having one: a card
+    // moved out mid-reveal (taken, or destroyed by a trigger) is not in it, so
+    // it cannot be bottomed by accident. Oldest first, then one shuffle.
+    const held = owner
+      ? (this.#zones.zone(action.revealed, owner)?.members ?? [])
+      : (this.#zones.unownedZone(action.revealed)?.members ?? []);
+    for (const entity of [...held]) {
+      await this.moveTo(entity, action.rest, {
+        ...(owner ? { owner } : {}),
+        position: 'bottom',
+        reason,
+      });
+    }
+    this.shuffleZone(action.rest, owner);
   }
 
   /**
@@ -1979,7 +2176,7 @@ export class GameEngine {
    */
   async #settleBuffGates(pre: Map<Gauge, GaugeBatchEntry>): Promise<void> {
     for (const [gauge, p] of pre) {
-      if (!p.owner || this.#inGraveyard(p.owner)) continue;
+      if (!p.owner || this.#inGarbage(p.owner)) continue;
       if (gauge.buffGates.length === 0) continue;
       for (const gate of gauge.buffGates) {
         const buffId = gate.buff.id ?? slugify(gate.buff.name);
@@ -2023,7 +2220,7 @@ export class GameEngine {
     const dying: DestroyedCharacter[] = [];
     const deferred: Action[] = [];
     for (const [gauge, p] of pre) {
-      if (!p.owner || this.#inGraveyard(p.owner)) continue;
+      if (!p.owner || this.#inGarbage(p.owner)) continue;
       // A current-aspect rule on this gauge fires — the built-in "current
       // reached min" death, or any content condition ("current === 4").
       // The gauge carries its own rules, so the phase needs no gauge-kind
@@ -2051,7 +2248,7 @@ export class GameEngine {
     }
     for (const pending of this.#pendingDestroy) {
       if (
-        !this.#inGraveyard(pending.target) &&
+        !this.#inGarbage(pending.target) &&
         this.canDestroy(pending.target, pending.source, pending.bypasses) &&
         !dying.some((d) => d.character === pending.target)
       ) {
@@ -2063,7 +2260,7 @@ export class GameEngine {
     // destruction, attributed to the max write the recompute produced.
     for (const zero of this.#pendingMaxZero) {
       if (
-        !this.#inGraveyard(zero.target) &&
+        !this.#inGarbage(zero.target) &&
         this.canDestroy(zero.target, zero.source) &&
         !dying.some((d) => d.character === zero.target)
       ) {
@@ -2087,7 +2284,7 @@ export class GameEngine {
     // are told in `#announceDestructions` after the cleanup.
     const batchEvents: CharacterDestroyedEvent[] = [];
     for (const d of dying) {
-      if (this.#inGraveyard(d.character)) continue;
+      if (this.#inGarbage(d.character)) continue;
       batchEvents.push(this.#buildDestroyedEvent(d));
     }
     if (batchEvents.length > 0) {
@@ -2099,7 +2296,7 @@ export class GameEngine {
 
     const destroyed: DestroyedCharacter[] = [];
     for (const d of dying) {
-      if (this.#inGraveyard(d.character)) continue; // already destroyed by a nested apply
+      if (this.#inGarbage(d.character)) continue; // already destroyed by a nested apply
       // The wearer's own on-defeat buffs are still attached here — its
       // self-death triggers are collected before the buffs die.
       this.#stack.enqueue(this.#buildDestroyedEvent(d));
@@ -2107,7 +2304,7 @@ export class GameEngine {
       // same batch, and a `buff:destroyed` listener can tell "died with its
       // wearer" from "removed" by checking whether the old wearer is still
       // in play (`engine.isInPlay(event.character)`).
-      this.#moveZone(d.character, this.#graveyardZone);
+      this.#moveZone(d.character, this.#garbageFor(d.character));
       d.character.destroyed = true;
       destroyed.push(d);
       this.#stateVersion += 1;

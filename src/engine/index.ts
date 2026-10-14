@@ -50,6 +50,7 @@ export {
   move,
   transform,
   popTransform,
+  discover,
 } from './actions.js';
 
 export {
@@ -179,7 +180,7 @@ export {
   Zone,
   ZoneRegistry,
   PLAY,
-  GRAVEYARD,
+  GARBAGE,
   IN_PLAY,
   REMOVED,
   type Entity,

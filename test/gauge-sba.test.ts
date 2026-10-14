@@ -135,7 +135,7 @@ describe('reusable death rules', () => {
     // Mana hits 0: the re-attached rule kills, with its own reason.
     await engine.damage(goblin.gauge('mana'), 20, hero);
     expect(goblin.destroyed).toBe(true);
-    expect(engine.graveyard).toContain(goblin);
+    expect(engine.garbage).toContain(goblin);
     const destroyed = events.find(
       (e): e is Extract<GameEvent, { type: 'character:destroyed' }> =>
         e.type === 'character:destroyed' && e.character === goblin,

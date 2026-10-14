@@ -184,7 +184,7 @@ describe('derived stats', () => {
     // settle — the death resolves at the next settle's destroy phase.
     await engine.apply([]);
     expect(engine.isInPlay(queen)).toBe(false);
-    expect(engine.graveyard).toContain(queen);
+    expect(engine.garbage).toContain(queen);
   });
 
   it('replaces then chains: a value function runs in weight order with static rewrites', async () => {
@@ -511,6 +511,6 @@ describe('derived stats', () => {
     statChanges.length = 0;
     await engine.destroy(doomed);
     expect(engine.isInPlay(doomed)).toBe(false);
-    expect(statChanges).toHaveLength(0); // the graveyard guard keeps it quiet
+    expect(statChanges).toHaveLength(0); // the garbage guard keeps it quiet
   });
 });

@@ -53,7 +53,7 @@ describe('the trigger queue', () => {
     const b = char('B', 30);
     const goblin = char('Goblin', 10);
     const shaman = char('Shaman', 30);
-    let graveyardAtCast = -1;
+    let garbageAtCast = -1;
     const observer = buff({
       name: 'Observer',
       weight: 1,
@@ -63,8 +63,8 @@ describe('the trigger queue', () => {
           event: 'character:destroyed',
           cast: (ctx) => {
             // At cast time (after the drain boundary) both deaths have
-            // fully settled — the graveyard already holds the whole wipe.
-            graveyardAtCast = ctx.engine.graveyard.length;
+            // fully settled — the garbage already holds the whole wipe.
+            garbageAtCast = ctx.engine.garbage.length;
             return [];
           },
         }),
@@ -79,7 +79,7 @@ describe('the trigger queue', () => {
     // HP is the life gauge — a wipe of lethal (HP) damage.
     await engine.apply([damage(a.gauge('hp'), 999, goblin), damage(b.gauge('hp'), 999, goblin)]);
 
-    expect(graveyardAtCast).toBe(2);
+    expect(garbageAtCast).toBe(2);
   });
 
   it('queued death triggers never run when a trigger\'s own actions end the game', async () => {

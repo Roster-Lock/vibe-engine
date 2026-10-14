@@ -65,7 +65,7 @@ import type { Character } from './character.js';
 import type { GameEvent, GameEventMap } from './contracts.js';
 import type { Gauge } from './gauge.js';
 import type { Buff } from './status/index.js';
-import { GRAVEYARD, IN_PLAY, type Entity, type Zone } from './zone.js';
+import { GARBAGE, IN_PLAY, type Entity, type Zone } from './zone.js';
 
 /** The zone an event refers to. */
 export type ZoneRef = Zone;
@@ -283,7 +283,7 @@ export type CharacterTransformedBatchEvent = {
  * with `'from' in event` before reading it, like every other versioned
  * event here.
  *
- * `destroy` is a move to the graveyard, so a destruction announces **both**
+ * `destroy` is a move to the garbage, so a destruction announces **both**
  * this and `character:destroyed`: this one is the mechanical transition
  * ("left play"), the other carries the death's `reason` and gauge writes.
  * Content that cares about leaving play — bounce, exile, death alike —
@@ -405,19 +405,19 @@ export function isZoneChange(event: GameEvent): event is ZoneChangedEvent {
  * **Dying is leaving play for the garbage pile.** Not a separate kind of
  * event — the same `zone:changed` every other move produces, with the two
  * ends that mean death: out of a zone in the `IN_PLAY` family, into the
- * graveyard.
+ * garbage.
  *
  * This is the definition to reason from, and it is Magic's own (rule
- * 700.4: *"dies means 'is put into a graveyard from the battlefield'"*).
+ * 700.4: *"dies means 'is put into a garbage from the battlefield'"*).
  * It settles a class of questions by construction:
  *
  * - a **bounce** (play → hand) is a zone change and not a death, so
  *   "whenever a creature leaves play" and "whenever a creature dies" are
  *   different listeners rather than one with a flag;
- * - **exile** (play → a `REMOVED` zone that is not the graveyard) is also
+ * - **exile** (play → a `REMOVED` zone that is not the garbage) is also
  *   not a death, which is exactly why removal-by-exile dodges death
  *   triggers;
- * - a thing that was **never in play** going to the graveyard (a discard
+ * - a thing that was **never in play** going to the garbage (a discard
  *   from hand) is not a death either.
  *
  * `character:destroyed` remains the **annotated** view of the same
@@ -430,7 +430,7 @@ export function isDeath(event: GameEvent): event is Extract<ZoneChangedEvent, { 
     isZoneChange(event) &&
     'from' in event &&
     event.from.group === IN_PLAY &&
-    event.to.id === GRAVEYARD.id
+    event.to.id === GARBAGE.id
   );
 }
 

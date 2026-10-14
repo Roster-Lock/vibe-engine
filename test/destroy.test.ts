@@ -2,10 +2,10 @@
  * The destroy model (docs/design/02-destroy.md, 04-sba.md, 05-targeting.md):
  *
  * - `destroy` is an action kind; HP ≤ 0 imposes a destroy (a state-based
- *   rule) — both land in the graveyard **simultaneously**,
+ *   rule) — both land in the garbage **simultaneously**,
  * - win/lose resolves first: a game-ending kill fires no
  *   `character:destroyed` events and no death triggers,
- * - the graveyard is not targetable (no more fireballing corpses),
+ * - the garbage is not targetable (no more fireballing corpses),
  * - on-defeat buffs are cleaned up per `removedOnDefeat` on destroy.
  */
 import { describe, expect, it } from 'vitest';
@@ -71,7 +71,7 @@ function makeEngine(players: TestPlayer[], onEvent?: (e: GameEvent) => void): Ga
 }
 
 describe('destroy action', () => {
-  it('moves the character to the graveyard and emits character:destroyed with the source', async () => {
+  it('moves the character to the garbage and emits character:destroyed with the source', async () => {
     const hero = char('Hero', 100);
     const goblin = char('Goblin', 20);
     const shaman = char('Shaman', 30);
@@ -85,7 +85,7 @@ describe('destroy action', () => {
 
     expect(engine.isInPlay(goblin)).toBe(false);
     expect(goblin.destroyed).toBe(true);
-    expect(engine.graveyard).toContain(goblin);
+    expect(engine.garbage).toContain(goblin);
     expect(engine.isInPlay(hero)).toBe(true);
     expect(engine.isInPlay(shaman)).toBe(true);
 
@@ -111,7 +111,7 @@ describe('destroy action', () => {
     await engine.destroy(goblin, hero);
     await engine.destroy(goblin, hero);
 
-    expect(engine.graveyard).toContain(goblin);
+    expect(engine.garbage).toContain(goblin);
     expect(events.filter((e) => e.type === 'character:destroyed')).toHaveLength(1);
   });
 
@@ -143,7 +143,7 @@ describe('destroy action', () => {
 
     await engine.destroy(goblin, hero);
 
-    expect(engine.graveyard).toContain(goblin);
+    expect(engine.garbage).toContain(goblin);
     expect(bombDamage).toBe(10);
     expect(hero.gauge('hp').current).toBe(90);
     expect(goblin.hasStatus('bomb')).toBe(false);
@@ -160,7 +160,7 @@ describe('destroy action', () => {
 
     await expect(engine.destroy(goblin, hero)).rejects.toBeInstanceOf(GameEndInterrupt);
     expect(events.some((e) => e.type === 'character:destroyed')).toBe(false);
-    // The destroy itself landed (graveyard), but the win/lose re-check threw
+    // The destroy itself landed (garbage), but the win/lose re-check threw
     // before any events fired.
     expect(engine.isInPlay(goblin)).toBe(false);
     expect(goblin.destroyed).toBe(true);
@@ -182,9 +182,9 @@ describe('HP ≤ 0 destruction', () => {
 
     await engine.apply([damage(a.gauge('hp'), 999, goblin), damage(b.gauge('hp'), 999, goblin)]);
 
-    // Both move to the graveyard together; the game continues (hero stands).
-    expect(engine.graveyard).toContain(a);
-    expect(engine.graveyard).toContain(b);
+    // Both move to the garbage together; the game continues (hero stands).
+    expect(engine.garbage).toContain(a);
+    expect(engine.garbage).toContain(b);
     expect(a.destroyed).toBe(true);
     expect(b.destroyed).toBe(true);
     expect(engine.isInPlay(hero)).toBe(true);
@@ -212,7 +212,7 @@ describe('HP ≤ 0 destruction', () => {
     // 20-max goblin's max HP to 0 — the hp:maximum-reached-0 reason.
     await engine.addBuff(goblin, buff({ name: 'Soul Drain', weight: 1, abilities: [maxModifier({ name: 'Soul Drain', gauge: 'hp', add: -20 })] }), hero);
 
-    expect(engine.graveyard).toContain(goblin);
+    expect(engine.garbage).toContain(goblin);
     expect(goblin.destroyed).toBe(true);
     expect(goblin.gauge('hp').max).toBe(0);
     const destroyed = events.filter((e) => e.type === 'character:destroyed');
@@ -252,8 +252,8 @@ describe('HP ≤ 0 destruction', () => {
     await engine.apply([damage(a.gauge('hp'), 999, goblin), damage(b.gauge('hp'), 999, goblin)]);
 
     expect(deaths).toBe(2);
-    expect(engine.graveyard).toContain(a);
-    expect(engine.graveyard).toContain(b);
+    expect(engine.garbage).toContain(a);
+    expect(engine.garbage).toContain(b);
   });
 
   it('a game-ending killing blow fires no destroyed events (win/lose first)', async () => {
@@ -268,13 +268,13 @@ describe('HP ≤ 0 destruction', () => {
     await expect(engine.damage(hero.gauge('hp'), 999)).rejects.toBeInstanceOf(GameEndInterrupt);
     expect(events.some((e) => e.type === 'character:destroyed')).toBe(false);
     // The game ended at the win/lose check *before* the destroy phase — the
-    // character never even moved to the graveyard.
+    // character never even moved to the garbage.
     expect(engine.isInPlay(hero)).toBe(true);
     expect(hero.destroyed).toBe(false);
   });
 });
 
-describe('the graveyard is not targetable', () => {
+describe('the garbage is not targetable', () => {
   it('excludes destroyed characters from the targeting pool', async () => {
     const hero = char('Hero', 100);
     const goblin = char('Goblin', 20);
@@ -289,7 +289,7 @@ describe('the graveyard is not targetable', () => {
     expect(pool).not.toContain(goblin);
     expect(pool).toContain(shaman);
     expect(engine.isInPlay(goblin)).toBe(false);
-    // The character is still registered (graveyard is a zone, not an exile).
+    // The character is still registered (garbage is a zone, not an exile).
     expect(engine.registeredCharacters).toContain(goblin);
   });
 
@@ -309,7 +309,7 @@ describe('the graveyard is not targetable', () => {
     ).rejects.toThrow('cannot target');
   });
 
-  it('`isDefeated` stays HP-derived; `destroyed` is the graveyard state', async () => {
+  it('`isDefeated` stays HP-derived; `destroyed` is the garbage state', async () => {
     const hero = char('Hero', 100);
     const goblin = char('Goblin', 20);
     const shaman = char('Shaman', 30);

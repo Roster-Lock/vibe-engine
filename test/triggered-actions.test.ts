@@ -106,7 +106,7 @@ describe('one cause fires every event it causes', () => {
     expect(types).toEqual([
       'gauge:changed',
       'gauge:changed:batch',
-      // A destroy is a move to the graveyard, so it announces the zone
+      // A destroy is a move to the garbage, so it announces the zone
       // change too: the mechanical fact ("left play") before the
       // interpretation ("died, for this reason").
       'zone:changed',
@@ -307,7 +307,7 @@ describe('multiple causes fire every event', () => {
       'gauge:changed',
       'gauge:changed',
       'gauge:changed:batch',
-      // A destroy is a move to the graveyard, so it announces the zone
+      // A destroy is a move to the garbage, so it announces the zone
       // change too: the mechanical fact ("left play") before the
       // interpretation ("died, for this reason").
       'zone:changed',

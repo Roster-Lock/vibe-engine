@@ -40,7 +40,7 @@
  * Types here are erased, so the type-only cycle with `events.ts` and
  * `actions.ts` costs nothing at runtime.
  */
-import type { ActionDirection, GaugeAction, MoveAction, AddBuffAction, RemoveBuffAction, DestroyAction, TransformAction, PopTransformAction } from './actions.js';
+import type { ActionDirection, GaugeAction, MoveAction, AddBuffAction, RemoveBuffAction, DestroyAction, TransformAction, PopTransformAction, DiscoverAction } from './actions.js';
 import type { CharacterDestroyedBatchEvent, CharacterDestroyedEvent, CharacterSurvivedBatchEvent, CharacterSurvivedEvent, CharacterTransformedBatchEvent, CharacterTransformedEvent, BuffAddedEvent, BuffDestroyedBatchEvent, BuffDestroyedEvent, EventSource, GaugeChangedBatchEvent, GaugeChangedEvent, GaugeMaxChangedEvent, StatChangedEvent, ZoneChangedBatchEvent, ZoneChangedEvent } from './events.js';
 import type { Ability, Targeting } from './ability/index.js';
 import type { Buff } from './status/index.js';
@@ -89,6 +89,13 @@ export interface ActionMap {
   destroy: DestroyAction;
   transform: TransformAction;
   popTransform: PopTransformAction;
+  /**
+   * Reveal until a card is worth taking. A built-in rather than a game's own
+   * action because the mechanic is generic: it reads zones and the entity's
+   * declared `attributes`, both of which the engine already has. What is
+   * *game-specific* is only the numbers the content passes.
+   */
+  discover: DiscoverAction;
 }
 
 /** Every action the engine can execute — the union of `ActionMap`. */

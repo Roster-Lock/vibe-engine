@@ -71,6 +71,17 @@ export type ValueIR =
    * the common case); zero when the query matches nothing.
    */
   | { readonly kind: 'gauge'; readonly gauge: string; readonly of?: EntityQueryIR }
+  /**
+   * A **named numeric fact** the game declared on an entity (`Entity.attributes`)
+   * — a card's `cost`, a `land` flag, a printed `power`.
+   *
+   * Not a gauge: a gauge is a value the engine maintains and clamps, while an
+   * attribute is a fact the game states once. Keeping them apart is what lets
+   * the engine filter an entity it knows nothing about without growing a field
+   * per game concept. With no `of`, it reads the entity in scope, like `gauge`.
+   * An absent name reads **0**.
+   */
+  | { readonly kind: 'attribute'; readonly attribute: string; readonly of?: EntityQueryIR }
   /** The formula language (Σ, arithmetic, paths) for anything else. */
   | { readonly kind: 'expr'; readonly expression: MathExpression };
 
@@ -214,6 +225,42 @@ export type EffectIR =
    * unlit icon.
    */
   | { readonly kind: 'toggleBuff'; readonly query: EntityQueryIR; readonly buff: BuffRefIR }
+  /**
+   * **Reveal until a card is worth taking** — Discover, generalised. See
+   * `DiscoverAction` for the mechanic and `GameEngine.#discover` for why it is
+   * an action rather than a bind-time loop.
+   *
+   * Zone names here are **abstract** (`library`, `board`) and the host maps
+   * them to its own declared zones (`BindOptions.aliases`), because the engine
+   * names no game's zones and the IR is the share format: a document must mean
+   * the same thing in a game whose library is called `deck`, `library` or
+   * `pile`. The `count` and the cost ceiling are ordinary values, so "discover
+   * 2" and "discover this card's power" are the same node.
+   */
+  | {
+      readonly kind: 'discover';
+      readonly count: ValueIR;
+      /** Taken only when the entity's `cost` attribute is at most this. */
+      readonly maxCost: ValueIR;
+      readonly from: string;
+      /**
+       * The temporary zone a looked-at card waits in. Its members at the end
+       * are what "the rest" means, which is why the IR names it rather than
+       * leaving the handler to remember a list.
+       */
+      readonly revealed: string;
+      readonly to: string;
+      /** Where the looked-at-but-untaken go, shuffled. */
+      readonly rest: string;
+      /**
+       * Cards this test answers **true** for are passed over: they are revealed
+       * and put aside, but never offered. This is the "or a land" half of
+       * "reveal until you find a nonland card with cost ≤ 2" — a land has no
+       * cost to compare, so the cost ceiling alone cannot exclude it without
+       * also excluding every free card.
+       */
+      readonly skip?: PredicateIR;
+    }
   /** `You win the game.` / `All players lose the game.` */
   | { readonly kind: 'result'; readonly players: 'you' | 'all'; readonly win: boolean };
 
@@ -445,7 +492,28 @@ export interface TriggerIR {
    */
   readonly gauge?: string | { readonly kind: 'life' };
   readonly change?: 'damage' | 'heal';
+  /**
+   * For a `zone:changed` trigger: which end of the move the phrase names.
+   *
+   * `{ verb: 'enters', id: 'play' }` is "enters play" — the entity arrived
+   * in `play`. `verb: 'leaves'` names the origin instead. `opposite` is the
+   * optional other end (`from active` / `to graveyard`); omitted, the
+   * trigger fires wherever the entity came from or went, which is the
+   * game-agnostic half that makes "enters play" usable without naming a
+   * path.
+   *
+   * Zone ids are the game's own (`docs/design/15-zones.md`) — the language
+   * never assumes `play`/`graveyard` beyond the engine shipping them.
+   */
+  readonly zone?: TriggerZoneIR;
   readonly steps: readonly StepIR[];
+}
+
+/** The `enters <zone> [from <zone>]` / `leaves <zone> [to <zone>]` phrase. */
+export interface TriggerZoneIR {
+  readonly verb: 'enters' | 'leaves';
+  readonly id: string;
+  readonly opposite?: string;
 }
 
 /* ------------------------------ documents ----------------------------- */

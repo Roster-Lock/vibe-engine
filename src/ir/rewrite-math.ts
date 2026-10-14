@@ -151,6 +151,10 @@ function valueToMath(value: ValueIR): MathExpression {
       return value.expression;
     case 'gauge':
       return { kind: 'path', parts: [value.gauge] };
+    case 'attribute':
+      // A game's own fact reads as a named path, like a gauge — the display
+      // layer needs no idea what `cost` means.
+      return { kind: 'path', parts: [value.attribute] };
     case 'count':
       return { kind: 'path', parts: ['count'] };
   }

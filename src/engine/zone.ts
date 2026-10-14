@@ -21,6 +21,7 @@
  * zone membership.
  */
 import type { Player } from './player.js';
+import { shuffle } from './seed.js';
 
 /**
  * **An entity** — anything a zone can hold.
@@ -47,6 +48,27 @@ export interface Entity {
   /** Discriminant — `'character'` for a `Character`. */
   readonly type: string;
   readonly name: string;
+  /**
+   * **Any numeric fact a game wants asked about this entity**, by name — a
+   * card's mana cost, a land flag (1/0), a printed power, a crew rating.
+   *
+   * This exists because the engine holds entities it knows nothing about, and
+   * an effect still has to *filter* them: "reveal until you find a card with
+   * cost 2 or less" is one generic sentence over one generic question. The
+   * engine has no `cost` field and must not grow one — cost is the card game's
+   * idea of what matters, not the engine's — so the game declares the fact and
+   * the engine only reads the map.
+   *
+   * An absent name reads **0** rather than throwing, the way an absent gauge
+   * does: content is shared between games, and a fact one game keeps and
+   * another does not should narrow an effect rather than break it. A game that
+   * needs to tell "no cost" from "cost 0" declares a companion fact (`land`).
+   *
+   * A **boolean** is not sugar for 0/1 at the type level, and the difference is
+   * the point: a `land` fact is *true*, not *zero-cost*, and the very next
+   * question after "is this a land" is "what does it cost".
+   */
+  readonly attributes?: ReadonlyMap<string, number | boolean>;
 }
 
 /** Who may see a zone's contents. */
@@ -104,15 +126,28 @@ export interface ZoneDef {
  * `IN_PLAY` is what "on the battlefield" means generically: a zone whose
  * occupants are live, targetable game objects. `REMOVED` is the family of
  * out-of-play piles. Content and the engine test these rather than zone
- * ids, so a game that renames `play` or splits `graveyard` by purpose keeps
+ * ids, so a game that renames `play` or splits `garbage` by purpose keeps
  * working (docs/design/15-zones.md, one zone per purpose).
  */
 export const IN_PLAY = 'in-play';
 export const REMOVED = 'removed';
 
-/** The engine's own zones. Everything else is a game's declaration. */
+/**
+ * The engine's own zones. Everything else is a game's declaration.
+ *
+ * `garbage` is **per-player**: a destroyed permanent belongs to whoever
+ * controlled it, and in a card game "your graveyard" is a real object that
+ * reanimation reads. It is the same pile a spent spell goes to, so there is
+ * one removed pile per player rather than a shared graveyard plus a second
+ * discard pile that every reader has to tell apart.
+ */
 export const PLAY: ZoneDef = { id: 'play', visibility: 'public', targetable: true, group: IN_PLAY };
-export const GRAVEYARD: ZoneDef = { id: 'graveyard', visibility: 'public', group: REMOVED };
+export const GARBAGE: ZoneDef = {
+  id: 'garbage',
+  visibility: 'public',
+  scope: 'per-player',
+  group: REMOVED,
+};
 
 /**
  * One zone instance. For a `per-player` declaration there is one instance
@@ -192,12 +227,14 @@ export class ZoneRegistry {
   /** Shared zones by id; per-player zones by `id` → player → instance. */
   readonly #shared = new Map<string, Zone>();
   readonly #perPlayer = new Map<string, Map<Player, Zone>>();
+  /** Per-player zones' instance for entities whose owner is unknown. */
+  readonly #unowned = new Map<string, Zone>();
   /** Every registered entity's current zone. */
   readonly #of = new Map<Entity, Zone>();
   /** Registration order — the order `entities` reports, independent of zones. */
   readonly #order: Entity[] = [];
 
-  constructor(defs: readonly ZoneDef[] = [PLAY, GRAVEYARD]) {
+  constructor(defs: readonly ZoneDef[] = [PLAY, GARBAGE]) {
     for (const def of defs) this.declare(def);
   }
 
@@ -230,7 +267,8 @@ export class ZoneRegistry {
 
   /**
    * A zone instance. A `per-player` zone needs its `owner`; asking for one
-   * without an owner returns undefined rather than guessing.
+   * without an owner returns undefined rather than guessing — use
+   * `unownedZone` when "no owner" is a real answer rather than an omission.
    */
   zone(id: string, owner?: Player): Zone | undefined {
     const def = this.#defs.get(id);
@@ -246,9 +284,39 @@ export class ZoneRegistry {
     return zone;
   }
 
+  /**
+   * The instance a `per-player` zone uses for entities with **no owner** —
+   * a character registered without a controller, whose destruction still
+   * has to put it somewhere.
+   *
+   * Distinct from `zone(id)` returning undefined: that is "you forgot the
+   * owner", this is "there is no owner", and a shared pile for the
+   * ownerless is the honest answer to the second.
+   */
+  unownedZone(id: string): Zone | undefined {
+    const def = this.#defs.get(id);
+    if (!def) return undefined;
+    if ((def.scope ?? 'shared') !== 'per-player') return this.#shared.get(id);
+    let zone = this.#unowned.get(id);
+    if (!zone) {
+      zone = new Zone(def);
+      this.#unowned.set(id, zone);
+    }
+    return zone;
+  }
+
   /** Every zone instance that exists, built-ins first. */
   get zones(): readonly Zone[] {
-    return [...this.#shared.values(), ...[...this.#perPlayer.values()].flatMap((m) => [...m.values()])];
+    return [
+      ...this.#shared.values(),
+      ...this.#unowned.values(),
+      ...[...this.#perPlayer.values()].flatMap((m) => [...m.values()]),
+    ];
+  }
+
+  /** Every instance of one zone id, across every owner. */
+  instancesOf(id: string): readonly Zone[] {
+    return this.zones.filter((zone) => zone.id === id);
   }
 
   /** Every zone of a family (`group`) — the generic-reference escape hatch. */
@@ -315,6 +383,18 @@ export class ZoneRegistry {
     const index = this.#order.indexOf(entity);
     if (index !== -1) this.#order.splice(index, 1);
     return true;
+  }
+
+  /**
+   * Shuffles an **ordered** zone in place (a deck) with the game's PRNG.
+   *
+   * This announces nothing: a move is a game event, but a shuffle is not —
+   * no player learns the order, so there is nothing to trigger on. An
+   * unordered zone is left alone, because it has no order to lose.
+   */
+  shuffle(zone: Zone, rng: () => number): void {
+    if (!zone.ordered) return;
+    shuffle(zone._members, rng);
   }
 
   #pull(entity: Entity, zone: Zone): void {
