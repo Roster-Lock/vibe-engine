@@ -39,6 +39,26 @@
  * of a separate object: the ability can resolve after its source is
  * destroyed.
  *
+ * ## The stack is LIFO, always
+ *
+ * It is **one array, bottom-first**: `stackObject`/`cast` push, `resolveTop`
+ * pops, and nothing else touches either end. So the last thing put on is the
+ * first thing resolved, in every path — a response before the spell it
+ * answered, a trigger before the spell that raised it, the last player to
+ * stack before the others (APNAP).
+ *
+ * The only views out are **top-first**, so no caller can accidentally walk
+ * the stack backwards:
+ *
+ * | Member | Order |
+ * | --- | --- |
+ * | `objects` | a top-first **copy** — the resolution order |
+ * | `top` | the next thing to resolve |
+ * | `#objects` | private, bottom-first — the storage detail, not the model |
+ *
+ * `counter` splices an object out wherever it sits and leaves the rest in
+ * their relative order. `test/stack-lifo.test.ts` pins all of it.
+ *
  * ## Timing
  *
  * `CastSpeed` is the instant/sorcery split, enforced by `canPut`:
@@ -77,28 +97,23 @@
  *   answers with a stack object rather than a selection — not just a
  *   rename.
  */
+import { GARBAGE } from '../../engine/index.js';
+import { castSpeedOf, isInstant, type CastSpeed } from './speed.js';
+import { Character } from '../../engine/index.js';
 import type {
   Action,
   Entity,
   ReadyTrigger,
   TriggerScheduler,
-  Character,
   GameEngine,
   Player,
   TargetPattern,
 } from '../../engine/index.js';
 
 /** Where a card goes once it has finished resolving. */
-export type StackDestination = 'play' | 'graveyard';
+export type StackDestination = 'play' | 'garbage';
 
-/**
- * When an object may be put on the stack.
- *
- * `'sorcery'` is the restrictive one: your main phase, your turn, empty
- * stack. `'instant'` is "whenever you hold priority", which is what makes
- * responding possible at all.
- */
-export type CastSpeed = 'instant' | 'sorcery';
+export type { CastSpeed } from './speed.js';
 
 /**
  * An **ability** waiting on the stack — an entity that is not a card.
@@ -148,7 +163,13 @@ interface StackObjectBase {
    * targets and has none left **fizzles**.
    */
   readonly targetPattern?: TargetPattern;
-  /** Defaults to `'sorcery'` — the restrictive timing, so an omission is safe. */
+  /**
+   * Defaults to `'sorcery'` — the restrictive timing, so an omission is safe.
+   *
+   * Usually unnecessary: mark the card or the ability with `instant(...)`
+   * (`speed.ts`) and the stack reads it. An explicit field is for a stack
+   * object that is not wrapping anything marked — a host-built trigger, say.
+   */
   readonly speed?: CastSpeed;
   /**
    * What it does. Called at resolution rather than when it was stacked, so
@@ -157,10 +178,21 @@ interface StackObjectBase {
   resolve(ctx: ResolveContext): Action[] | Promise<Action[]>;
 }
 
-/** A card on the stack. It moves `hand → stack → active → destination`. */
+/**
+ * A card on the stack. It moves `hand → stack → active → destination`.
+ *
+ * `card` is any entity, not necessarily a `Character`: a spell has no
+ * gauges and must not pretend to (see `Entity` in `src/engine/zone.ts`).
+ * That is why targeting is resolved against `self` — the character a
+ * pattern is relative to, usually the caster's avatar — rather than
+ * against the card. A card that *is* a character (a permanent spell) can
+ * leave `self` out and stands in for itself.
+ */
 export interface SpellObject extends StackObjectBase {
   readonly kind: 'spell';
-  readonly card: Character;
+  readonly card: Entity;
+  /** The character the targeting pattern is relative to. Defaults to the card. */
+  readonly self?: Character;
   readonly destination: StackDestination;
 }
 
@@ -177,9 +209,19 @@ export function entityOf(object: StackObject): Entity {
   return object.kind === 'spell' ? object.card : object.ability;
 }
 
-/** An object's effective timing. */
+/**
+ * An object's effective timing, in precedence order:
+ *
+ * 1. an explicit `speed` on the stack object (a host-built trigger);
+ * 2. the **instant marker** on the card or ability it wraps — one symbol,
+ *    whether the thing is a card or an activated ability;
+ * 3. sorcery, the restrictive default, so forgetting is safe.
+ */
 export function speedOf(object: StackObject): CastSpeed {
-  return object.speed ?? 'sorcery';
+  if (object.speed) return object.speed;
+  if (isInstant(entityOf(object))) return 'instant';
+  if (object.kind === 'ability' && isInstant(object.ability)) return 'instant';
+  return castSpeedOf(object);
 }
 
 /** Why an object left the stack without resolving. */
@@ -249,6 +291,45 @@ export interface PriorityOwner {
 /** True when a player can hold priority (implements `PriorityOwner`). */
 export function isPriorityOwner(player: Player): player is Player & PriorityOwner {
   return typeof (player as Partial<PriorityOwner>).takePriority === 'function';
+}
+
+/** The triggers waiting for one player to order them. */
+export interface TriggerOrderRequest {
+  /** The player being asked — the **only** player who orders these. */
+  readonly player: Player;
+  /**
+   * That player's simultaneous triggers, in their default order (the order
+   * the abilities were registered). Always two or more: one trigger is not
+   * a question.
+   */
+  readonly triggers: readonly AbilityStackObject[];
+  readonly engine: GameEngine;
+}
+
+/**
+ * A player that **orders its own simultaneous triggers**.
+ *
+ * Rule 603.3b: when several abilities trigger at once, each player chooses
+ * the order their own go on the stack — the active player first, then each
+ * other player in turn order. Nobody orders anyone else's, which is why
+ * this is asked once per player and not once per batch.
+ *
+ * The answer is the order they go **on the stack**, so the *last* one
+ * resolves first (`triggerOrder` in the UI says so out loud). Return the
+ * same triggers, each exactly once; anything else is a host bug and throws,
+ * the way `runPriority` throws on an illegal `put`.
+ *
+ * A `Player` that does not implement this keeps the default: the order the
+ * abilities were registered, which is deterministic and therefore
+ * replayable. Choosing introduces an input — a legitimate one, like a move.
+ */
+export interface TriggerOrderer {
+  orderTriggers(request: TriggerOrderRequest): Promise<readonly AbilityStackObject[]>;
+}
+
+/** True when a player orders its own triggers (implements `TriggerOrderer`). */
+export function isTriggerOrderer(player: Player): player is Player & TriggerOrderer {
+  return typeof (player as Partial<TriggerOrderer>).orderTriggers === 'function';
 }
 
 /** What one resolution did, for logs and tests. */
@@ -417,6 +498,9 @@ export class CardStack {
   /**
    * Puts every queued triggered ability on the stack, the active player's
    * first (APNAP). Returns how many were stacked.
+   *
+   * Within one player's batch, an orderer chooses (rule 603.3b); everyone
+   * else keeps the deterministic registration order.
    */
   async flushTriggered(players: readonly Player[], activePlayer: Player): Promise<number> {
     if (this.#triggered.length === 0) return 0;
@@ -424,7 +508,8 @@ export class CardStack {
     const order = [activePlayer, ...players.filter((p) => p !== activePlayer)];
     let stacked = 0;
     for (const player of order) {
-      for (const object of queued.filter((o) => o.controller === player)) {
+      const mine = queued.filter((o) => o.controller === player);
+      for (const object of await this.#ordered(player, mine)) {
         if (await this.stackObject(object)) stacked += 1;
       }
     }
@@ -433,6 +518,32 @@ export class CardStack {
       if (await this.stackObject(object)) stacked += 1;
     }
     return stacked;
+  }
+
+  /**
+   * One player's triggers, in the order they go on the stack: the player's
+   * answer if they order triggers, the registration order otherwise.
+   */
+  async #ordered(
+    player: Player,
+    mine: readonly AbilityStackObject[],
+  ): Promise<readonly AbilityStackObject[]> {
+    if (mine.length < 2 || !isTriggerOrderer(player)) return mine;
+    const chosen = await player.orderTriggers({ player, triggers: mine, engine: this.#engine });
+    // Exactly the triggers it was handed, each once: a dropped or duplicated
+    // trigger is a host bug, and silently accepting it would lose a game
+    // action with no error anywhere.
+    const sameObjects =
+      chosen.length === mine.length &&
+      new Set(chosen).size === chosen.length &&
+      chosen.every((object) => mine.includes(object));
+    if (!sameObjects) {
+      throw new Error(
+        `flushTriggered: ${player.name} ordered triggers into ` +
+          `${chosen.length} object(s) that are not the ${mine.length} it was asked about`,
+      );
+    }
+    return chosen;
   }
 
   /**
@@ -456,7 +567,7 @@ export class CardStack {
       this.#engine.removeEntity(object.ability);
       return;
     }
-    await this.#engine.moveTo(object.card, 'graveyard', { reason });
+    await this.#engine.moveTo(object.card, GARBAGE.id, { reason, owner: object.controller });
   }
 
   /**
@@ -489,7 +600,8 @@ export class CardStack {
       // An ability's actions are sourced to its **source permanent**, not
       // to the ability object — a non-character entity is not an
       // `EventSource`, and "who dealt this" should name the permanent.
-      const source = object.kind === 'spell' ? object.card : object.ability.source;
+      const source =
+        object.kind === 'spell' ? (object.self ?? (object.card as Character)) : object.ability.source;
       await this.#engine.apply(actions, { source });
     }
 
@@ -498,7 +610,7 @@ export class CardStack {
     // still there.
     if (this.#zone('active').contains(entity)) {
       if (object.kind === 'ability') this.#engine.removeEntity(entity);
-      else await this.#engine.moveTo(object.card, object.destination, { reason: 'resolved' });
+      else await this.#engine.moveTo(object.card, object.destination, { reason: 'resolved', owner: object.controller });
     }
     return { object, outcome: 'resolved', targets: legal };
   }
@@ -588,9 +700,17 @@ export class CardStack {
   /** The object's targets that are still legal, by its own pattern. */
   #legalTargets(object: StackObject): Character[] {
     if (!object.targetPattern) return [...object.targets];
-    // A pattern is relative to a character: the spell's own card, or an
-    // ability's source permanent.
-    const self = object.kind === 'spell' ? object.card : object.ability.source;
+    // A pattern is relative to a character: a spell's `self` (usually the
+    // caster), a permanent spell's own card, or an ability's source.
+    const self =
+      object.kind === 'spell'
+        ? (object.self ?? (object.card as Character))
+        : object.ability.source;
+    if (!(self instanceof Character)) {
+      throw new Error(
+        `CardStack: "${object.name}" has a targeting pattern but no character to resolve it against — set "self"`,
+      );
+    }
     const pool = this.#engine.validTargets(object.targetPattern, self);
     return object.targets.filter((target) => pool.includes(target));
   }

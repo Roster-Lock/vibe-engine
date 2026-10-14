@@ -88,7 +88,7 @@ function table() {
     controller,
     targets: [target],
     targetPattern: { who: 'any', count: 1 },
-    destination: 'graveyard',
+    destination: 'garbage',
     resolve: ({ targets }): Action[] => targets.map((t) => damage(t.gauge('hp'), 10, card)),
   });
 
@@ -111,7 +111,7 @@ describe('casting and resolving', () => {
     const report = await t.stack.resolveTop();
     expect(report?.outcome).toBe('resolved');
     expect(t.foe.gauge('hp').current).toBe(10);
-    expect(t.engine.zones.zoneOf(card)?.id).toBe('graveyard');
+    expect(t.engine.zones.zoneOf(card)?.id).toBe('garbage');
     expect(t.stack.size).toBe(0);
   });
 
@@ -165,7 +165,7 @@ describe('casting and resolving', () => {
         name,
         controller: t.you,
         targets: [],
-        destination: 'graveyard',
+        destination: 'garbage',
         resolve: (): Action[] => {
           order.push(name);
           return [];
@@ -190,7 +190,7 @@ describe('leaving the stack without resolving', () => {
 
     expect(await t.stack.counter(object)).toBe(true);
     expect(t.stack.size).toBe(0);
-    expect(t.engine.zones.zoneOf(card)?.id).toBe('graveyard');
+    expect(t.engine.zones.zoneOf(card)?.id).toBe('garbage');
     expect(t.foe.gauge('hp').current).toBe(20); // never dealt
 
     expect(await t.stack.resolveTop()).toBeUndefined();
@@ -209,7 +209,7 @@ describe('leaving the stack without resolving', () => {
     expect(report?.outcome).toBe('fizzled');
     expect(report?.targets).toEqual([]);
     expect(t.foe.gauge('hp').current).toBe(20);
-    expect(t.engine.zones.zoneOf(card)?.id).toBe('graveyard');
+    expect(t.engine.zones.zoneOf(card)?.id).toBe('garbage');
   });
 
   it('a spell with surviving targets resolves against only those', async () => {
@@ -295,7 +295,7 @@ describe('priority', () => {
 
           controller: t.them,
           targets: [],
-          destination: 'graveyard',
+          destination: 'garbage',
           resolve: async (): Promise<Action[]> => {
             resolved.push('Counterspell');
             await t.stack.counter(victim);
@@ -310,7 +310,7 @@ describe('priority', () => {
     // resolved, and never dealt its damage.
     expect(reports.map((r) => r.object.name)).toEqual(['Counterspell']);
     expect(t.foe.gauge('hp').current).toBe(20);
-    expect(t.engine.zones.zoneOf(bolt)?.id).toBe('graveyard');
+    expect(t.engine.zones.zoneOf(bolt)?.id).toBe('garbage');
     expect(t.stack.size).toBe(0);
   });
 
@@ -327,7 +327,7 @@ describe('priority', () => {
           speed: 'instant',
           controller: player,
           targets: [],
-          destination: 'graveyard',
+          destination: 'garbage',
           resolve: (): Action[] => [],
         });
     };
@@ -347,7 +347,7 @@ describe('instant and sorcery speed', () => {
     controller,
     targets: [],
     speed: 'sorcery',
-    destination: 'graveyard',
+    destination: 'garbage',
     resolve: (): Action[] => [],
   });
   const instant = (card: Character, controller: Player): StackObject => ({
@@ -392,7 +392,7 @@ describe('instant and sorcery speed', () => {
       name: 'Unmarked',
       controller: t.you,
       targets: [],
-      destination: 'graveyard',
+      destination: 'garbage',
       resolve: (): Action[] => [],
     };
     expect(t.stack.canPut(object, t.them, { activePlayer: t.you, mainPhase: true })).toBe(false);
@@ -448,7 +448,7 @@ describe('abilities on the stack', () => {
     expect(t.foe.gauge('hp').current).toBe(15);
     // Gone from the game, not sent to a zone — an ability has no destination.
     expect(t.engine.zones.zoneOf(object.ability)).toBeUndefined();
-    expect(t.engine.graveyard).toEqual([]);
+    expect(t.engine.garbage).toEqual([]);
   });
 
   it("the ability's source stays in play, and its damage is attributed to it", async () => {
@@ -471,7 +471,7 @@ describe('abilities on the stack', () => {
     await t.stack.stackObject(pinger(t.hero, t.you, t.foe));
     // The source dies while its ability waits — the whole reason the
     // ability is a separate object on the stack.
-    await t.engine.moveTo(t.hero, 'graveyard', { reason: 'destroyed' });
+    await t.engine.moveTo(t.hero, 'garbage', { reason: 'destroyed' });
     expect(t.engine.isInPlay(t.hero)).toBe(false);
 
     const report = await t.stack.resolveTop();
@@ -606,7 +606,7 @@ describe('triggers are respondable to', () => {
           controller: t.you,
           targets: [],
           speed: 'instant',
-          destination: 'graveyard',
+          destination: 'garbage',
           resolve: async (): Promise<Action[]> => {
             await t.stack.counter(victim);
             return [];
