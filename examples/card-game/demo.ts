@@ -3,7 +3,7 @@
  *
  *   npx tsx examples/card-game/demo.ts
  *
- * Everything you see — trades, taunt blocking a lethal swing, a deathrattle
+ * Everything you see — trades, taunt blocking a lethal swing, an on-death trigger
  * drawing a card, +2/+2 changing a creature's derived stat line, fatigue,
  * and the match ending the moment a hero falls — is the engine's action
  * pipeline doing its job. The card layer only deals cards and counts mana.

@@ -46,7 +46,7 @@ import { isAlly, isEnemy } from '../../src/games/round-based/index.js';
 export const ATTACK_PATTERN: TargetPattern = { who: 'enemy', count: 1 };
 
 /** Marker skill: a creature with it is a taunter. */
-const TAUNT_MARKER: SkillDef = skill({ id: 'taunt', name: 'Taunt', weight: 0, abilities: [] });
+export const TAUNT_MARKER: SkillDef = skill({ id: 'taunt', name: 'Taunt', weight: 0, abilities: [] });
 
 /** True when `character` is a taunter that is still on the board. */
 export function hasTaunt(character: Character): boolean {
@@ -99,7 +99,7 @@ export const attack = cast({
  * (`ctx.self` is the would-be target), so taunt is written from the
  * defender's side: *I* cannot be attacked while an ally of mine taunts.
  */
-const tauntRule = restriction({
+export const tauntRule = restriction({
   id: 'taunt-rule',
   name: 'Taunt',
   description: 'cannot be attacked while an ally taunts',
@@ -146,24 +146,3 @@ export function makeHero(name: string): Character {
   });
 }
 
-/**
- * Turns a creature card into a board character and stamps its allegiance.
- *
- * Engine gap: there is no `summon` action, so the card layer creates the
- * `Character` itself and calls `engine.registerCharacter` — creation is not
- * part of the action pipeline and fires no event. See README.md.
- */
-export function makeCreature(card: CreatureCard, controller: Player, side: CardSide): Character {
-  const abilities = [attack, tauntRule, ...(card.abilities?.(side) ?? [])];
-  const creature = new Character(card.name, {
-    maxHp: card.health,
-    stats: { power: card.power },
-    skills: [
-      skill({ name: card.name, weight: 1, abilities }),
-      ...(card.keywords?.includes('taunt') ? [TAUNT_MARKER] : []),
-    ],
-  });
-  creature.controller = controller;
-  creature.team = controller.team;
-  return creature;
-}

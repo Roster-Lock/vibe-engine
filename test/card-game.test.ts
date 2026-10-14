@@ -153,7 +153,7 @@ describe('card game — taunt', () => {
 });
 
 describe('card game — abilities', () => {
-  it('runs a deathrattle: Loot Hoarder draws its controller a card', async () => {
+  it('runs an on-death trigger: Loot Hoarder draws its controller a card', async () => {
     const { game, a, b } = makeGame(deckOf(LOOT_HOARDER), deckOf(FIREBALL));
     await game.setup();
     for (let i = 0; i < 2; i++) await turn(game);
@@ -172,7 +172,7 @@ describe('card game — abilities', () => {
     await turn(game); // Bob turn 8: Fireball kills the Hoarder
 
     expect(game.sideOf(a).board).not.toContain(hoarder);
-    expect(game.sideOf(a).hand.size).toBe(handBefore + 1); // the deathrattle drew
+    expect(game.sideOf(a).hand.size).toBe(handBefore + 1); // the on-death trigger drew
   });
 });
 
@@ -193,7 +193,7 @@ describe('card game — winning', () => {
 
     expect(winners).toEqual([a]);
     // Win/lose resolves *before* the destroy phase, so the hero is defeated
-    // (hp at 0) without ever being moved to the graveyard.
+    // (hp at 0) without ever being moved to the garbage.
     expect(b.hero.isDefeated).toBe(true);
     expect(b.isDefeated).toBe(true);
   });

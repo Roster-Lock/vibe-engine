@@ -25,6 +25,7 @@ import {
   type Targeting,
 } from '../../src/games/turn-based/index.js';
 import { isAlly, isEnemy } from '../../src/games/round-based/index.js';
+import { instant } from '../../src/games/cards/speed.js';
 
 /* ------------------------------ the shapes ------------------------------ */
 
@@ -36,18 +37,32 @@ export type Keyword = 'taunt' | 'charge';
  */
 export interface CardSide {
   readonly heroName: string;
-  /** Draws cards into the hand (fatigue applies when the deck is empty). */
-  draw(count?: number): void;
+  /**
+   * Draws cards into the hand (fatigue applies when the deck is empty).
+   *
+   * Async because a draw is a **move** now (`zone:changed`, so content can
+   * answer it) — and it goes through the pipeline rather than being
+   * hand-rolled.
+   */
+  draw(count?: number): Promise<void>;
 }
 
 /** What a card's effect sees while it resolves. */
 export interface CardContext {
-  /** The hero that played the card (a creature's own battlecry: the creature). */
+  /** The hero that played the card (a creature's own enters-play effect: the creature). */
   readonly self: Character;
   readonly engine: GameEngine;
   readonly side: CardSide;
 }
 
+/**
+ * A card's **printed data** — what the creator wrote and the catalog ships.
+ *
+ * Deliberately not an entity: the thing that sits in a zone is the
+ * *instantiated* card (`objects.ts`), and for a permanent that object is the
+ * creature itself. Keeping the data separate from identity is what lets one
+ * creature card be many physical cards in many decks.
+ */
 interface CardBase {
   readonly id: string;
   readonly name: string;
@@ -62,21 +77,37 @@ export interface CreatureCard extends CardBase {
   readonly health: number;
   readonly keywords?: readonly Keyword[];
   /**
-   * Abilities the creature carries on the board, built fresh per instance so
-   * they can close over the side that played it (a deathrattle that draws).
+   * Abilities the creature **grants** on the board, built fresh per instance
+   * so they can close over the side that played it (an on-death trigger that
+   * draws). Named `grants` rather than `abilities` because the instantiated
+   * entity *is* a `Character`, whose own `abilities` are the built list.
    */
-  readonly abilities?: (side: CardSide) => Ability[];
-  /** Battlecry: runs once, the moment the creature lands. */
-  readonly onPlay?: (ctx: CardContext, targeting: Targeting) => Action[];
-  /** What the battlecry may target. Omit for an untargeted one. */
+  readonly grants?: (side: CardSide) => Ability[];
+  /** The enters-play effect: runs once, the moment the creature lands. */
+  readonly onPlay?: (ctx: CardContext, targeting: Targeting) => Action[] | Promise<Action[]>;
+  /** What the enters-play effect may target. Omit for an untargeted one. */
   readonly onPlayTargeting?: TargetPattern;
+  /**
+   * `when this enters play from <zone>` — the zone `onPlay` insists the
+   * creature arrived from. Undefined means "from anywhere". The card layer
+   * stages a played creature in `active` and moves it into `play`, so an
+   * effect written `from active` is the normal cast and one written `from
+   * stack` is unreachable by playing the card.
+   */
+  readonly arrivesFrom?: string;
 }
 
 export interface SpellCard extends CardBase {
   readonly kind: 'spell';
   /** Omit for a spell that picks no targets (a board-wide effect). */
   readonly targeting?: TargetPattern;
-  readonly effect: (ctx: CardContext, targeting: Targeting) => Action[];
+  /**
+   * The effect. Async because authored effects can — a `You may …` or a
+   * `Repeat …` sentence asks the controller mid-resolution, so a card
+   * compiled from English returns a promise. The catalog's hand-written
+   * effects return plain arrays.
+   */
+  readonly effect: (ctx: CardContext, targeting: Targeting) => Action[] | Promise<Action[]>;
 }
 
 export type Card = CreatureCard | SpellCard;
@@ -84,7 +115,7 @@ export type Card = CreatureCard | SpellCard;
 /* -------------------------------- buffs --------------------------------- */
 
 /** +2/+2 — power is a derived **stat**, health a derived gauge **max**. */
-const blessed = buff({
+export const blessed = buff({
   id: 'blessed',
   name: 'Blessed',
   description: '+2/+2',
@@ -97,7 +128,7 @@ const blessed = buff({
 });
 
 /** Gurubashi's rage: +3 power, once per wound, stacking. */
-const berserkerRage = buff({
+export const berserkerRage = buff({
   id: 'berserker-rage',
   name: 'Berserker Rage',
   description: '+3 power',
@@ -124,7 +155,7 @@ export const ELVEN_ARCHER: CreatureCard = {
   cost: 1,
   power: 1,
   health: 1,
-  text: 'Battlecry: deal 1 damage.',
+  text: 'When this enters play: deal 1 damage.',
   onPlayTargeting: { who: 'enemy', count: 1 },
   onPlay: (ctx, targeting) => {
     const target = targeting.targets[0];
@@ -150,10 +181,10 @@ export const LOOT_HOARDER: CreatureCard = {
   cost: 2,
   power: 2,
   health: 1,
-  text: 'Deathrattle: draw a card.',
-  abilities: (side) => [
+  text: 'When this dies: draw a card.',
+  grants: (side) => [
     auto({
-      name: 'Deathrattle: Draw',
+      name: 'On death: Draw',
       event: 'character:destroyed',
       when: (ctx) => ctx.event.character === ctx.self,
       // A draw is card-layer state, not an engine Action — the trigger does
@@ -194,7 +225,7 @@ export const GURUBASHI_BERSERKER: CreatureCard = {
   power: 2,
   health: 7,
   text: 'Whenever this takes damage, gain +3 power.',
-  abilities: () => [
+  grants: () => [
     auto({
       name: 'Berserk',
       event: 'gauge:changed',
@@ -230,7 +261,12 @@ export const BLESSING: SpellCard = {
   },
 };
 
-export const FIREBALL: SpellCard = {
+/**
+ * An **instant**: castable whenever its controller holds priority, not just
+ * in their own main phase. The marker is the symbol from `speed.ts` — the
+ * same one an activated ability can carry.
+ */
+export const FIREBALL: SpellCard = instant({
   kind: 'spell',
   id: 'fireball',
   name: 'Fireball',
@@ -241,7 +277,7 @@ export const FIREBALL: SpellCard = {
     const target = targeting.targets[0];
     return target ? [damage(target.gauge('hp'), 6, ctx.self)] : [];
   },
-};
+});
 
 export const HEALING_TOUCH: SpellCard = {
   kind: 'spell',
@@ -290,7 +326,13 @@ export const CONSECRATION: SpellCard = {
 
 /* ------------------------------- the decks ------------------------------ */
 
-/** Repeats a card `n` times — decks run two copies of most things. */
+/**
+ * Repeats a card `n` times — decks run two copies of most things.
+ *
+ * The *data* is shared on purpose: identity belongs to the instantiated
+ * entity (`objects.ts`), so two copies of one card are two entities built
+ * from the same printed data.
+ */
 const copies = (card: Card, n: number): Card[] => Array.from({ length: n }, () => card);
 
 export const STARTER_DECK: readonly Card[] = [

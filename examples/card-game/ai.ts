@@ -11,6 +11,15 @@
  * hit the face when nothing better offers itself.
  */
 import { Player, commitSecret, type Character, type Decision } from '../../src/engine/index.js';
+import {
+  PASS,
+  put,
+  type AbilityStackObject,
+  type PriorityRequest,
+  type PriorityResponse,
+  type TriggerOrderRequest,
+} from '../../src/games/cards/stack.js';
+import { isInstant } from '../../src/games/cards/speed.js';
 import { HERO_POWER_COST, makeHero } from './combat.js';
 import type { Card, CreatureCard, SpellCard } from './cards.js';
 import type { CardGame, Move } from './game.js';
@@ -38,8 +47,50 @@ export abstract class CardPlayer extends Player {
     return [];
   }
 
+  /**
+   * The game that owns this player, set by `CardGame`. Priority is answered
+   * with a *spell*, so a player holding it needs the game to build the
+   * stack object — `chooseMove` gets the game passed in, and this is the
+   * same dependency for a question asked at a different time.
+   */
+  game: CardGame | undefined;
+
   /** The next thing this player wants to do, or `{ kind: 'end' }` to pass. */
   abstract chooseMove(game: CardGame): Promise<Move>;
+
+  /**
+   * **Priority**, the other question a card game asks.
+   *
+   * `chooseMove` is "what do you do on your turn"; this is "someone has put
+   * something on the stack — do you answer it?". They are separate because
+   * they happen at different times and answer with different things: a move
+   * is an action in your own main phase, while holding priority can put a
+   * *spell* on the stack (never an attack), and passing is a real answer
+   * rather than the absence of one.
+   *
+   * The base implementation passes, which is the right default for an AI
+   * that only acts on its own turn and for a scripted opponent. `HumanCardPlayer`
+   * overrides it to wait for the UI; `GreedyAI` overrides it to answer when
+   * it holds an instant.
+   */
+  async takePriority(request: PriorityRequest): Promise<PriorityResponse> {
+    void request;
+    return PASS;
+  }
+
+  /**
+   * **Ordering simultaneous triggers**, the third question a card game asks.
+   *
+   * Only the player whose triggers they are answers it, and only when there
+   * are two or more. The base implementation keeps the table order — the
+   * order the abilities were registered — which is deterministic, so a
+   * replay of the same seed with the same players is the same game. An AI
+   * that wants to be clever overrides this ("my draw trigger can wait until
+   * after the damage lands").
+   */
+  async orderTriggers(request: TriggerOrderRequest): Promise<readonly AbilityStackObject[]> {
+    return request.triggers;
+  }
 
   /** Deterministic seed contribution: same players ⇒ same shuffle. */
   override commitSeed(): string {
@@ -52,6 +103,29 @@ export abstract class CardPlayer extends Player {
 }
 
 export class GreedyAI extends CardPlayer {
+  /**
+   * Holding priority, the greedy AI answers **only something**: with an empty
+   * stack its own turn is `chooseMove`'s business, so it passes. With an
+   * object waiting, it fires the most expensive instant it can afford that
+   * has a legal target — which is what makes a human's spells answerable.
+   */
+  override async takePriority(request: PriorityRequest): Promise<PriorityResponse> {
+    const game = this.game;
+    if (!game || request.stack.length === 0) return PASS;
+    const side = game.sideOf(this);
+    const playable = [...side.hand.cards]
+      .filter((card) => isInstant(card) && card.cost <= side.mana)
+      .sort((a, b) => b.cost - a.cost);
+    for (const card of playable) {
+      const targets = this.#targetsFor(game, card);
+      if (targets === null) continue;
+      // Pay before offering: an answer costs exactly what it costs.
+      if (!(await game.chargeFor(card, this))) continue;
+      return put(game.castObject(card, this, targets));
+    }
+    return PASS;
+  }
+
   async chooseMove(game: CardGame): Promise<Move> {
     const side = game.sideOf(this);
 
@@ -87,9 +161,9 @@ export class GreedyAI extends CardPlayer {
   }
 
   #creatureTargets(card: CreatureCard, options: Character[]): Character[] | null {
-    if (!card.onPlayTargeting) return []; // no battlecry, or an untargeted one
-    if (options.length === 0) return []; // battlecry simply fizzles
-    // A battlecry ping: finish something off, else chip the smallest.
+    if (!card.onPlayTargeting) return []; // no enters-play effect, or an untargeted one
+    if (options.length === 0) return []; // an enters-play effect with nowhere to point simply fizzles
+    // An enters-play ping: finish something off, else chip the smallest.
     const sorted = [...options].sort((a, b) => a.gauge('hp').current - b.gauge('hp').current);
     return [sorted[0]!];
   }
