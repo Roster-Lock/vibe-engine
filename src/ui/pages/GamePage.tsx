@@ -13,12 +13,14 @@
  * The loop is invalidated via a match id on rematch or unmount, so a stale
  * async loop can never overwrite a newer match's state.
  */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { GameEndInterrupt, isDamage, isHpChange, type Character, type GameEvent, type Player } from '../../games/turn-based/index.js';
 import { LocalGame } from '../../multiplayer/local.js';
 import { RandomAI } from '../../multiplayer/random-ai.js';
 import { CharacterCard } from '../components/cards.js';
 import { CombatLog } from '../components/log.js';
+import { GlossaryProvider } from '../glossary/index.js';
+import { liveDefiner, uiGlossaryOptions } from '../glossary/catalogs.js';
 import type { CharacterDef } from '../../games/turn-based/content/index.js';
 import { endTurn, startTurn } from '../../games/round-based/index.js';
 
@@ -292,7 +294,15 @@ export function GamePage({
     (event) => WATCH_EVENTS.has(event.type) && (event.type !== 'gauge:changed' || isHpChange(event)),
   );
 
+  // The two fighters as they stand — so a buff chip explains the buff's *real*
+  // definition, and a name explains the fighter carrying it.
+  const glossaryOptions = useMemo(
+    () => uiGlossaryOptions({ define: liveDefiner(() => [left, right].filter((c): c is Character => c !== undefined)) }),
+    [left, right],
+  );
+
   return (
+    <GlossaryProvider options={glossaryOptions}>
     <div className="page game-page">
       <header className="page-header">
         <button className="back" onClick={onExit}>← Fighters</button>
@@ -410,5 +420,6 @@ export function GamePage({
         </>
       )}
     </div>
+    </GlossaryProvider>
   );
 }

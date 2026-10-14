@@ -3,12 +3,14 @@
  * targets) against the goblins' `RandomAI`. This was the original tinyquest
  * UI, now living as a page reachable from the main menu.
  */
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import type { Character, GameEvent, ManualAbility, Player } from '../../engine/index.js';
 import { LocalGame } from '../../multiplayer/local.js';
 import { RandomAI } from '../../multiplayer/random-ai.js';
 import { CharacterCard } from '../components/cards.js';
 import { CombatLog } from '../components/log.js';
+import { GlossaryProvider } from '../glossary/index.js';
+import { liveDefiner, uiGlossaryOptions } from '../glossary/catalogs.js';
 import { HumanPlayer, makeGoblin, makeHero, thorns } from '../../games/turn-based/content/index.js';
 
 export function PlayPage({ onMenu }: { onMenu: () => void }) {
@@ -75,7 +77,13 @@ export function PlayPage({ onMenu }: { onMenu: () => void }) {
   const validTargets = picked && game ? game.engine.validTargets(picked.ability.targeting, hero) : [];
   const maxTargets = picked ? maxCount(picked.ability) : 0;
 
+  const glossaryOptions = useMemo(
+    () => uiGlossaryOptions({ define: liveDefiner(() => [hero, goblin]) }),
+    [hero, goblin],
+  );
+
   return (
+    <GlossaryProvider options={glossaryOptions}>
     <div className="page play-page">
       <header className="page-header">
         <button className="back" onClick={onMenu}>← Menu</button>
@@ -170,6 +178,7 @@ export function PlayPage({ onMenu }: { onMenu: () => void }) {
         </section>
       </main>
     </div>
+    </GlossaryProvider>
   );
 }
 

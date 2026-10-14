@@ -2,11 +2,15 @@
  * Main menu — the app's front door. The headline option is **Watch**:
  * pick two fighters and let their AIs battle it out. **Create** opens the
  * Ability editor — write abilities in English and test them in battle.
+ * **Play cards** opens the collectible card game, and **Create a card**
+ * opens the card creator (autocomplete and grammar checks per word).
  */
 export function MainMenuPage({
   onWatch,
   onCreate,
   onPlay,
+  onCards,
+  onCreateCard,
 }: {
   /** Go to the fighter selection page. */
   onWatch: () => void;
@@ -14,6 +18,10 @@ export function MainMenuPage({
   onCreate: () => void;
   /** Go to the (preserved) play-it-yourself battle. */
   onPlay: () => void;
+  /** Go to the collectible card game. */
+  onCards: () => void;
+  /** Go to the card creator. */
+  onCreateCard: () => void;
 }) {
   return (
     <div className="page menu-page">
@@ -28,6 +36,16 @@ export function MainMenuPage({
           ▶&nbsp; Watch
         </button>
         <p className="hint">Choose two fighters, then watch the AIs fight.</p>
+
+        <button className="primary cards-btn" onClick={onCards}>
+          🃏&nbsp; Play cards
+        </button>
+        <p className="hint">A collectible card game — you vs the AI, two players on one screen, or watch two AIs.</p>
+
+        <button className="menu-secondary create-btn" onClick={onCreateCard}>
+          🎴&nbsp; Create a card
+        </button>
+        <p className="hint">Write a card in English — autocomplete and grammar checks on every word, then play it.</p>
 
         <button className="menu-secondary create-btn" onClick={onCreate}>
           ⚡&nbsp; Create an ability

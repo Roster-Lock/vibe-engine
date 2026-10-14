@@ -18,6 +18,8 @@ import {
   type Diagnostic,
   type Span,
 } from '../../english/index.js';
+import { describeTerm } from '../glossary/describe.js';
+import { editorGlossary, glossaryAt } from './glossary-editor.js';
 
 export const TINYQUEST_LANG = 'tinyquest-english';
 
@@ -111,26 +113,36 @@ export function ensureTinyQuestLanguage(): void {
     provideHover: (model, position) => {
       const word = model.getWordAtPosition(position);
       if (!word) return undefined;
-      const offset = model.getOffsetAt({
-        lineNumber: position.lineNumber,
-        column: word.startColumn,
+      const offset = model.getOffsetAt({ lineNumber: position.lineNumber, column: word.startColumn });
+      const text = model.getValue();
+      // One lookup, shared with the card editor and the game UI. The parser's
+      // own buff-reference resolution is span-accurate, so it answers first;
+      // the glossary scan covers every other word.
+      const glossary = editorGlossary({ source: text });
+      const hit = glossaryAt(text, offset, glossary, {
+        resolve: () => {
+          const buff = buffReferenceInfo(text, offset);
+          if (!buff) return undefined;
+          // A document-declared buff is described from its own body; a
+          // host-supplied one from the engine definition.
+          const term = glossary.define({ kind: 'buff', name: buff.name });
+          const details = buff.declared || !term ? describeBuffReference(buff) : describeTerm(term);
+          return {
+            term: {
+              ref: { kind: 'buff', name: buff.name },
+              glyph: buff.name,
+              summary: term?.summary ?? buff.name,
+              details,
+            },
+            start: buff.span.start,
+            end: buff.span.end,
+          };
+        },
       });
-      // Buff names show what the buff does; every other word gets its
-      // one-line vocabulary help.
-      const buff = buffReferenceInfo(model.getValue(), offset);
-      if (buff) {
-        return {
-          range: spanToRange(model, buff.span),
-          contents: [{ value: describeBuffReference(buff) }],
-        };
-      }
-      const doc = wordDoc(word.word);
-      if (!doc) return undefined;
+      if (!hit) return undefined;
       return {
-        range: word
-          ? new monaco.Range(position.lineNumber, word.startColumn, position.lineNumber, word.endColumn)
-          : undefined,
-        contents: [{ value: doc }],
+        range: spanToRange(model, { start: hit.start, end: hit.end }),
+        contents: [{ value: hit.term.details ?? hit.term.summary }],
       };
     },
   });
@@ -156,7 +168,7 @@ export function ensureTinyQuestLanguage(): void {
 }
 
 /** Converts an english span (offsets) into a Monaco range on a model. */
-function spanToRange(model: monaco.editor.ITextModel, span: Span): monaco.Range {
+export function spanToRange(model: monaco.editor.ITextModel, span: Span): monaco.Range {
   const start = model.getPositionAt(span.start);
   const end = model.getPositionAt(span.end);
   return new monaco.Range(
@@ -171,6 +183,7 @@ function spanToRange(model: monaco.editor.ITextModel, span: Span): monaco.Range 
 export function applyDiagnostics(
   model: monaco.editor.ITextModel,
   diagnostics: readonly Diagnostic[],
+  owner = 'tinyquest-english',
 ): void {
   const markers: monaco.editor.IMarkerData[] = diagnostics.map((d) => {
     const start = model.getPositionAt(d.start);
@@ -189,5 +202,5 @@ export function applyDiagnostics(
       endColumn: Math.max(end.column, start.column + 1),
     };
   });
-  monaco.editor.setModelMarkers(model, 'tinyquest-english', markers);
+  monaco.editor.setModelMarkers(model, owner, markers);
 }

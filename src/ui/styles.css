@@ -743,6 +743,7 @@ button.speed.chosen {
   overflow: hidden;
 }
 
+
 .diag-count {
   font-size: 12px;
   color: #7dcea0;
@@ -904,4 +905,795 @@ button.speed.chosen {
   border-radius: 8px;
   padding: 8px 10px;
   background: #161a22;
+}
+
+/* ------------------------------- card creator ---------------------------- */
+
+.card-face-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+
+.card-face {
+  border: 1px solid #3a4152;
+  border-left: 4px solid #c9a227;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: linear-gradient(160deg, #232936, #1b2029);
+}
+
+.card-face-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.card-cost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #2471a3;
+  color: #eaf4ff;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.card-face-name {
+  font-weight: 600;
+  font-size: 15px;
+  flex: 1;
+}
+
+.card-face-stats {
+  color: #f4c542;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.card-face-kind {
+  color: #9aa3b5;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.card-keywords {
+  margin: 6px 0 0;
+  color: #f4c542;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.card-rules {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: #c8cfdd;
+}
+
+.card-meta {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: #7d8798;
+}
+
+.save-note {
+  margin: 0 0 8px;
+  font-size: 13px;
+  color: #7dcea0;
+}
+
+.deck-list {
+  margin: 0 0 10px;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 4px;
+}
+
+.deck-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  background: #232936;
+  border-radius: 6px;
+  padding: 5px 8px;
+}
+
+.deck-remove {
+  background: transparent;
+  border: none;
+  color: #9aa3b5;
+  padding: 2px 6px;
+  font-size: 12px;
+}
+
+.deck-remove:hover {
+  color: #ff8f8f;
+}
+
+.play-saved {
+  width: 100%;
+}
+
+/* -------------------------------- card game ------------------------------ */
+
+.cards-btn {
+  background: #6c3483;
+  border-color: #6c3483;
+}
+
+.cards-btn:hover:not(:disabled) {
+  background: #7d3c98;
+}
+
+.card-setup {
+  max-width: 640px;
+  margin: 0 auto;
+  border: 1px solid #2c3140;
+  border-radius: 12px;
+  padding: 18px 20px;
+  background: #1c2029;
+  display: grid;
+  gap: 14px;
+}
+
+.card-setup h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.mode-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.mode-picker button {
+  padding: 10px 12px;
+}
+
+.mode-picker button.chosen {
+  background: #2471a3;
+  border-color: #2471a3;
+  font-weight: 600;
+}
+
+.custom-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #c8cfdd;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  color: #5dade2;
+  padding: 0;
+  font-size: inherit;
+  text-decoration: underline;
+}
+
+.link-button:hover {
+  color: #85c1e9;
+}
+
+.table-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1000px) {
+  .table-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.table-main {
+  display: grid;
+  gap: 10px;
+}
+
+.turn-prompt {
+  margin: 0;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #1f3a2f;
+  border: 1px solid #2e6b4f;
+  color: #a9e6c8;
+  font-size: 14px;
+}
+
+.selection-hint {
+  color: #d7e7ff;
+  font-size: 13px;
+}
+
+.player-side {
+  border: 1px solid #2c3140;
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: #1a1e27;
+  display: grid;
+  gap: 10px;
+}
+
+.player-side.active {
+  border-color: #c9a227;
+  box-shadow: 0 0 0 1px rgba(201, 162, 39, 0.35);
+}
+
+.side-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.side-name {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.side-badge {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #f4c542;
+}
+
+.hero-panel {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  border: 1px solid #3a4152;
+  border-radius: 10px;
+  padding: 8px 12px;
+  background: #222836;
+}
+
+.hero-panel.active {
+  border-color: #c9a227;
+}
+
+.hero-panel.targetable {
+  cursor: pointer;
+  border-color: #e74c3c;
+  box-shadow: 0 0 0 2px rgba(231, 76, 60, 0.35);
+}
+
+.hero-name {
+  font-weight: 600;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hero-turn {
+  color: #f4c542;
+  font-size: 11px;
+}
+
+.hero-stats {
+  display: flex;
+  gap: 12px;
+  font-variant-numeric: tabular-nums;
+  font-size: 14px;
+}
+
+.hero-hp {
+  color: #ff8f8f;
+  font-weight: 700;
+}
+
+.hero-mana {
+  color: #5dade2;
+  font-weight: 700;
+}
+
+.hero-piles {
+  display: flex;
+  gap: 12px;
+  color: #9aa3b5;
+  font-size: 13px;
+  margin-left: auto;
+}
+
+.board-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 64px;
+  align-items: center;
+}
+
+.board-empty {
+  font-size: 12.5px;
+}
+
+.minion {
+  display: grid;
+  gap: 2px;
+  min-width: 96px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid #3a4152;
+  background: #262d3c;
+  color: #d7dce6;
+  text-align: left;
+  cursor: default;
+}
+
+.minion.taunt {
+  border-color: #7d8798;
+  background: #303a4c;
+}
+
+.minion.ready {
+  cursor: pointer;
+  border-color: #27ae60;
+  box-shadow: 0 0 0 1px rgba(39, 174, 96, 0.4);
+}
+
+.minion.attacking {
+  border-color: #f4c542;
+}
+
+.minion.targetable {
+  cursor: pointer;
+  border-color: #e74c3c;
+  box-shadow: 0 0 0 2px rgba(231, 76, 60, 0.35);
+}
+
+.minion-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.minion-stats {
+  display: flex;
+  gap: 8px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.minion-power {
+  color: #f4c542;
+}
+
+.minion-hp {
+  color: #ff8f8f;
+}
+
+.minion-taunt {
+  font-size: 11px;
+  color: #9aa3b5;
+}
+
+.hand-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 74px;
+  align-items: flex-start;
+}
+
+.hand-card {
+  display: grid;
+  gap: 2px;
+  width: 118px;
+  padding: 8px 9px;
+  border-radius: 10px;
+  border: 1px solid #3a4152;
+  background: #232936;
+  color: #d7dce6;
+  text-align: left;
+  cursor: default;
+  opacity: 0.55;
+}
+
+.hand-card.playable {
+  opacity: 1;
+  cursor: pointer;
+  border-color: #27ae60;
+}
+
+.hand-card.chosen {
+  border-color: #f4c542;
+  box-shadow: 0 0 0 2px rgba(244, 197, 66, 0.35);
+}
+
+.hand-cost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #2471a3;
+  color: #eaf4ff;
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.hand-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.hand-rules {
+  font-size: 11.5px;
+  color: #9aa3b5;
+  line-height: 1.3;
+}
+
+.side-footnote {
+  margin: 0;
+  font-size: 11.5px;
+  color: #6d7688;
+}
+
+.versus-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #6d7688;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.versus-row::before,
+.versus-row::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: #2c3140;
+}
+
+.table-side {
+  display: grid;
+  gap: 16px;
+}
+
+.controls-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.speed-picker,
+.sample-picker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #9aa3b5;
+}
+
+.speed-picker {
+  margin: 8px 0;
+}
+
+.result-line {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: #f4c542;
+}
+
+.order-bar {
+  border-color: #6aa9e0;
+  background: #17222e;
+}
+
+.order-bar .respond-head {
+  color: #8cc6f5;
+}
+
+.trigger-order {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 2px;
+  font-size: 13px;
+  color: #dbe6f5;
+}
+
+.rules-list {
+  margin: 0 0 8px;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+  font-size: 12.5px;
+  color: #c8cfdd;
+}
+
+.respond-bar {
+  display: grid;
+  gap: 8px;
+  border: 1px solid #c9a227;
+  border-radius: 10px;
+  padding: 10px 12px;
+  background: #2a2317;
+}
+
+.respond-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  color: #f4c542;
+  font-size: 14px;
+}
+
+.respond-head .hint {
+  margin: 0;
+}
+
+.log-card .card-log {
+  max-height: 340px;
+  overflow-y: auto;
+}
+
+.card-log {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 2px;
+  font-size: 12.5px;
+  color: #b9c0d0;
+  font-variant-numeric: tabular-nums;
+  white-space: pre-wrap;
+}
+
+.card-log li {
+  border-bottom: 1px dashed #232936;
+  padding: 2px 0;
+}
+
+
+/* ------------------------------- glossary -------------------------------- */
+/*
+ * A term is a word with a definition. It looks like a word — a dotted
+ * underline and nothing louder — because card rules text is prose first, and
+ * marking every term up heavily would make a card unreadable. The colour
+ * carries the kind, which is the one bit of structure worth showing.
+ */
+
+.term {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
+.term:hover,
+.term:focus-visible {
+  background: #2b3446;
+  text-decoration-style: solid;
+}
+
+.term:focus-visible {
+  outline: 1px solid #6ea8fe;
+}
+
+.term-keyword { color: #f4c542; }
+.term-buff { color: #7ee0a1; }
+.term-character,
+.term-permanent { color: #7fb2ff; }
+.term-zone { color: #c79bf0; }
+.term-word { color: inherit; }
+.term-rule,
+.term-card,
+.term-skill { color: #e6a86c; }
+
+/* The panel: fixed, so a definition never reflows the board underneath it. */
+.term-panel {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 40;
+  width: min(360px, calc(100vw - 32px));
+  max-height: min(70vh, 520px);
+  overflow-y: auto;
+  padding: 12px 14px 14px;
+  border: 1px solid #33405a;
+  border-left: 3px solid #6ea8fe;
+  border-radius: 10px;
+  background: #1b202b;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.term-panel.kind-keyword { border-left-color: #f4c542; }
+.term-panel.kind-buff { border-left-color: #7ee0a1; }
+.term-panel.kind-character,
+.term-panel.kind-permanent { border-left-color: #7fb2ff; }
+.term-panel.kind-zone { border-left-color: #c79bf0; }
+
+.term-panel-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.term-panel-head .term-kind {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #9aa3b5;
+}
+
+.term-name {
+  flex: 1;
+  margin: 0;
+  font-size: 15px;
+}
+
+.term-back,
+.term-close {
+  background: none;
+  border: none;
+  color: #9aa3b5;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.term-back:hover,
+.term-close:hover {
+  background: #2b3446;
+  color: #e8eaf0;
+}
+
+.term-summary {
+  margin: 0 0 8px;
+  color: #cfd6e4;
+}
+
+.term-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin: 0 0 8px;
+}
+
+.term-fact {
+  display: flex;
+  gap: 5px;
+  align-items: baseline;
+}
+
+.term-fact dt {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8b94a8;
+}
+
+.term-fact dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+  color: #e8eaf0;
+}
+
+.term-more {
+  background: none;
+  border: none;
+  color: #7fb2ff;
+  cursor: pointer;
+  padding: 0;
+  font-size: 12.5px;
+}
+
+.term-more:hover {
+  text-decoration: underline;
+}
+
+.term-body p {
+  margin: 0 0 8px;
+}
+
+.term-body p:last-child,
+.term-body ul:last-child {
+  margin-bottom: 0;
+}
+
+.term-body blockquote {
+  margin: 0 0 8px;
+  padding-left: 10px;
+  border-left: 2px solid #33405a;
+  color: #aeb7c9;
+  font-style: italic;
+}
+
+.term-body h4,
+.term-examples h4 {
+  margin: 10px 0 4px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: #8b94a8;
+}
+
+.term-body ul,
+.term-examples ul {
+  margin: 0 0 8px;
+  padding-left: 16px;
+}
+
+.term-body code,
+.term-examples code {
+  background: #232936;
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 12px;
+}
+
+/*
+ * The trail: where a chain of definitions has been, so a deep walk is a place
+ * and not a one-way trip. Sits under the header, scrolls horizontally rather
+ * than wrapping, and never pushes the definition itself out of view.
+ */
+.term-trail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 4px;
+  margin: 0 0 8px;
+  font-size: 11.5px;
+  color: #8b94a8;
+}
+
+.term-step {
+  display: inline-flex;
+  gap: 4px;
+  align-items: baseline;
+}
+
+.term-step-sep {
+  color: #5a6478;
+}
+
+.term-step-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: #7fb2ff;
+  cursor: pointer;
+  font: inherit;
+}
+
+.term-step-link:hover {
+  text-decoration: underline;
+}
+
+.term-step-current {
+  color: #cfd6e4;
+}
+
+/* A term nested inside a definition reads as a link, not as body text. */
+.term-body .term,
+.term-summary .term,
+.term-facts .term {
+  text-decoration-color: #6ea8fe;
 }

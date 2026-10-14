@@ -1,8 +1,15 @@
 /**
  * Shared character display: an HP/mana card used by every page that shows
  * fighters.
+ *
+ * Every word on the card is **selectable** — the buff chips and the character's
+ * own name open a definition (see `src/ui/glossary/`). A page that shows these
+ * cards should be wrapped in a `GlossaryProvider` so the words resolve to real
+ * content; one that is not still works, with the language's own vocabulary.
  */
 import type { Character } from '../../engine/index.js';
+import { useTermPanel } from '../glossary/index.js';
+import { Term } from '../glossary/Term.js';
 
 export function CharacterCard({
   character,
@@ -14,15 +21,17 @@ export function CharacterCard({
   /** Side accent used by the watch battle (red vs blue). */
   tone?: 'red' | 'blue';
 }) {
+  const { define } = useTermPanel();
   const hpPct = (character.gauge('hp').current / character.gauge('hp').max) * 100;
   const manaPct = character.gauge('mana').max > 0 ? (character.gauge('mana').current / character.gauge('mana').max) * 100 : 0;
   // All buffs — including permanent ones (`removable: false`, e.g. an
   // aura's mark) — show as buff badges.
   const buffs = character.statuses.filter((s) => s.type === 'buff');
+  const definition = define({ kind: 'character', name: character.name });
 
   return (
     <article className={['card', character.isDefeated ? 'defeated' : '', tone ? `tone-${tone}` : ''].filter(Boolean).join(' ')}>
-      <h2>{character.name}</h2>
+      <h2>{definition ? <Term term={definition}>{character.name}</Term> : character.name}</h2>
       {label && <p className="team">{label}</p>}
       <Bar label="HP" value={character.gauge('hp').current} max={character.gauge('hp').max} pct={hpPct} tone="hp" />
       {character.gauge('mana').max > 0 && (
@@ -32,13 +41,21 @@ export function CharacterCard({
         {buffs.length === 0 ? (
           <span className="hint">no buffs</span>
         ) : (
-          groupBuffs(buffs).map(({ id, name, icon, count }) => (
-            <span className="buff" key={id}>
-              {icon ? <img className="buff-icon" src={icon} alt="" /> : <span aria-hidden>✨</span>}
-              {name}
-              {count > 1 ? ` ×${count}` : ''}
-            </span>
-          ))
+          groupBuffs(buffs).map(({ id, name, icon, count }) => {
+            const buff = define({ kind: 'buff', name });
+            const chip = (
+              <>
+                {icon ? <img className="buff-icon" src={icon} alt="" /> : <span aria-hidden>✨</span>}
+                {name}
+                {count > 1 ? ` ×${count}` : ''}
+              </>
+            );
+            return (
+              <span className="buff" key={id}>
+                {buff ? <Term term={buff}>{chip}</Term> : chip}
+              </span>
+            );
+          })
         )}
       </div>
       {character.isDefeated && <p className="defeated-tag">💀 defeated</p>}
