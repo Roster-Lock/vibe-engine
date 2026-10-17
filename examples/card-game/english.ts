@@ -14,7 +14,7 @@
  */
 import { compileCardDocument, type CardCompileResult, type CompiledCard } from '../../src/english/card.js';
 import { ZoneDictionary, type BuffDictionary, type Diagnostic } from '../../src/english/index.js';
-import { ACTIVE, DECK, HAND, STACK } from '../../src/games/cards/zones.js';
+import { ACTIVE, DECK, HAND, STACK, STOLEN } from '../../src/games/cards/zones.js';
 import type {
   Ability,
   Action,
@@ -37,6 +37,7 @@ export function toGameCard(card: CompiledCard): Card {
   const text = card.rulesText.length > 0 ? { text: card.rulesText } : {};
   const ability = card.ability;
   const targeting = card.targeting;
+  const handAbilities = (card.handAbilities ?? []).map((own) => own.ability);
 
   if (card.kind === 'creature') {
     const creature: CreatureCard = {
@@ -47,6 +48,8 @@ export function toGameCard(card: CompiledCard): Card {
       power: card.power ?? 0,
       health: card.health ?? 1,
       ...(card.keywords.length > 0 ? { keywords: [...card.keywords] } : {}),
+      ...(card.entry ? { entry: card.entry } : {}),
+      ...(handAbilities.length > 0 ? { handAbilities } : {}),
       ...text,
       // An arrival effect that picks a target offers a pattern; one that finds its
       // own victims (or takes none) does not.
@@ -66,6 +69,7 @@ export function toGameCard(card: CompiledCard): Card {
 
   const spell: SpellCard = {
     kind: 'spell',
+    ...(handAbilities.length > 0 ? { handAbilities } : {}),
     id,
     name: card.name,
     cost: card.cost,
@@ -78,6 +82,11 @@ export function toGameCard(card: CompiledCard): Card {
 }
 
 export interface AuthoredCards {
+  /** Creature definitions (`Creature Giant Golem 6/6`) that effects make; hand them to `CardGame.installCreatures`. */
+  readonly creatures: Card[];
+  /** Zones the document declares; hand them to `CardGame.installZones` with the bindings. */
+  readonly zoneDefs: readonly import('../../src/engine/index.js').ZoneDef[];
+  readonly zoneBindings: readonly import('../../src/ir/index.js').ZoneBinding[];
   /** Every playable card the document declares, in document order. */
   readonly cards: Card[];
   readonly diagnostics: Diagnostic[];
@@ -90,7 +99,7 @@ export interface AuthoredCards {
  * `graveyard`; these are the card game's own — where a card sits while it
  * resolves (`active`), where a spell waits (`stack`), and the piles.
  */
-export const CARD_LANGUAGE_ZONES = new ZoneDictionary([DECK.id, HAND.id, STACK.id, ACTIVE.id]);
+export const CARD_LANGUAGE_ZONES = new ZoneDictionary([DECK.id, HAND.id, STACK.id, ACTIVE.id, STOLEN.id]);
 
 /**
  * Compiles a card document and converts every card it declares into
@@ -101,10 +110,16 @@ export const CARD_LANGUAGE_ZONES = new ZoneDictionary([DECK.id, HAND.id, STACK.i
 export function playableCards(source: string, dictionary?: BuffDictionary): AuthoredCards {
   const compiled = compileCardDocument(source, {
     zones: CARD_LANGUAGE_ZONES,
+    // The language says `library`; this game calls it `deck`. `Draw(…)` itself
+    // runs this game's own draw (fatigue, a ten-card hand) — see `Side`.
+    bind: { aliases: { library: DECK.id } },
     ...(dictionary ? { dictionary } : {}),
   });
   return {
-    cards: compiled.cards.map(toGameCard),
+    cards: compiled.cards.filter((card) => !card.token).map(toGameCard),
+    creatures: compiled.cards.filter((card) => card.token).map(toGameCard),
+    zoneDefs: compiled.zoneDefs,
+    zoneBindings: compiled.zones,
     diagnostics: compiled.diagnostics,
     compiled,
   };

@@ -38,6 +38,9 @@
     "ui:build": "vite build src/ui",
     "example:stamina": "tsx src/examples/stamina.ts",
     "example:execution": "tsx src/examples/execution.ts",
+    "example:rounds": "tsx src/examples/rounds-and-dice.ts",
+    "example:online": "tsx src/examples/online.ts",
+    "example:online-server": "tsx src/examples/online-server.ts",
     "rts:demo": "tsx examples/rts/src/demo.ts",
     "rts:codegen": "tsx examples/rts/scripts/generate.ts",
     "rts:test": "vitest run examples/rts"
@@ -54,16 +57,19 @@
     "@types/node": "^26.3.0",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
+    "@types/ws": "^8.18.2",
     "@vitejs/plugin-react": "^4.7.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vite": "^5.4.21",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "ws": "^8.22.0"
   },
   "dependencies": {
     "katex": "^0.18.7",
+    "mdx-m3-viewer": "^5.12.0",
     "monaco-editor": "^0.56.0"
   }
 }

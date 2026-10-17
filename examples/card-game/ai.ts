@@ -113,7 +113,7 @@ export class GreedyAI extends CardPlayer {
     const game = this.game;
     if (!game || request.stack.length === 0) return PASS;
     const side = game.sideOf(this);
-    const playable = [...side.hand.cards]
+    const playable = [...game.castableCards(this)]
       .filter((card) => isInstant(card) && card.cost <= side.mana)
       .sort((a, b) => b.cost - a.cost);
     for (const card of playable) {
@@ -126,16 +126,26 @@ export class GreedyAI extends CardPlayer {
     return PASS;
   }
 
+  /** Cards this AI has already opened, so a card that survives its ability is not opened forever. */
+  readonly #opened = new WeakSet<object>();
+
   async chooseMove(game: CardGame): Promise<Move> {
     const side = game.sideOf(this);
 
     // 1. Spend mana: the most expensive card that has somewhere to go.
-    const playable = [...side.hand.cards]
+    const playable = [...game.castableCards(this)]
       .filter((card) => card.cost <= side.mana)
       .sort((a, b) => b.cost - a.cost);
     for (const card of playable) {
       const targets = this.#targetsFor(game, card);
       if (targets !== null) return { kind: 'play', card, targets };
+    }
+
+    // 1b. Open anything a zone or an effect has made openable, once per card.
+    for (const { card, ability } of game.cardAbilities(this)) {
+      if (this.#opened.has(card)) continue;
+      this.#opened.add(card);
+      return { kind: 'use', card, ability, targets: [] };
     }
 
     // 2. Attack with everything that is ready.
@@ -172,7 +182,7 @@ export class GreedyAI extends CardPlayer {
     if (!card.targeting) return []; // board-wide: always castable
     if (options.length === 0) return null; // needs a target and has none
 
-    switch (card.id) {
+    switch ((card as { printedId?: string }).printedId ?? card.id) {
       case 'fireball': {
         const kill = options.find((c) => c.gauge('hp').current <= 6 && this.#isCreature(c));
         return [kill ?? options.find((c) => !this.#isCreature(c)) ?? options[0]!];

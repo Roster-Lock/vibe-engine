@@ -172,4 +172,4 @@ export type {
   TriggerMode,
   TriggerScope,
 } from '../ir/index.js';
-export { IR_VERSION, bindDocument, type BindOptions, type BindResult } from '../ir/index.js';
+export { IR_VERSION, bindDocument, type BindOptions, type BindResult, type ZoneBinding } from '../ir/index.js';

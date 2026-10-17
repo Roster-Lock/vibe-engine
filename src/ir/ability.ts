@@ -82,8 +82,39 @@ export type ValueIR =
    * An absent name reads **0**.
    */
   | { readonly kind: 'attribute'; readonly attribute: string; readonly of?: EntityQueryIR }
+  /**
+   * **What the most recent `roll` in this resolution came to** — the `total` of
+   * its dice, or the `highest` / `lowest` single die. For one die all three are
+   * the die. Reads 0 when nothing has been rolled yet. English: `that total`.
+   *
+   * It is always the *latest* roll; to keep an earlier one, `store` it under a
+   * name and read the name (`variable`).
+   *
+   * A roll is an *effect*, not a value, and this is how later values read it: an
+   * effect that said "deal damage equal to a d6 roll" twice would roll twice and
+   * make a replay depend on how often the amount was evaluated. Rolling once and
+   * naming the outcome is what keeps it deterministic.
+   */
+  | { readonly kind: 'rolled'; readonly stat: RolledStat }
+  /**
+   * **A value stored earlier in this resolution** by a `store` effect — English
+   * writes the bare name (`AttackerRoll`). Reads 0 if nothing was stored under
+   * that name; the English compiler reports that as an error before it can run.
+   */
+  | { readonly kind: 'variable'; readonly name: string }
+  /**
+   * **How many votes an option got** in the most recent vote of this resolution
+   * (a `choose` over labelled options). English: `votes for Attack`. A sealed
+   * vote can only be read after its `reveal`; a player whose commitment was
+   * forfeited cast no vote. Reads 0 if nothing has been voted on.
+   */
+  | { readonly kind: 'votes'; readonly option: string }
   /** The formula language (Σ, arithmetic, paths) for anything else. */
   | { readonly kind: 'expr'; readonly expression: MathExpression };
+
+/** Which number of a roll a `rolled` value reads. */
+export type RolledStat = 'total' | 'highest' | 'lowest';
+
 
 /* ----------------------------- predicates ----------------------------- */
 
@@ -143,7 +174,7 @@ export type PredicateIR =
        * "this character" means as a trigger subject ("when this character
        * dies"). The others are relations to the owner's controller.
        */
-      readonly to: 'self' | 'you' | 'opponent' | 'ally' | 'enemy';
+      readonly to: 'self' | 'you' | 'opponent' | 'ally' | 'enemy' | 'winners' | 'losers';
     };
 
 /* ------------------------------- queries ------------------------------ */
@@ -261,14 +292,341 @@ export type EffectIR =
        */
       readonly skip?: PredicateIR;
     }
+  /**
+   * **Players choose** — one answer each, possibly all at once and in secret.
+   * Opens a *round* named `round`, which later effects read by that name
+   * ("the card they chose"). See docs/design/20-secret-choices-and-dice.md.
+   *
+   * `secret: true` is a sealed round: every chooser answers without seeing the
+   * others, and nothing is readable until a `reveal` for the same round. `false`
+   * asks in turn order, each chooser seeing the earlier answers.
+   *
+   * A player with nothing to choose from (an empty hand) simply is not in the
+   * round, and so is not waited on or moved.
+   */
+  | {
+      readonly kind: 'choose';
+      readonly round: string;
+      readonly players: ChoosersIR;
+      readonly secret: boolean;
+      readonly pick: PickIR;
+      /**
+       * Who answers first in an *open* round (ignored when `secret`, where
+       * everyone answers at once). Defaults to `caster-first`.
+       */
+      readonly order?: ChooseOrderIR;
+    }
+  /**
+   * **Roll dice** — `count` dice of `sides` faces. Goes through the action
+   * pipeline (so it can be modified and is announced as `roll:made`), and its
+   * outcome is read by later effects as `{ kind: 'rolled' }`. See
+   * docs/design/20-secret-choices-and-dice.md.
+   */
+  | { readonly kind: 'roll'; readonly count: ValueIR; readonly sides: ValueIR }
+  /**
+   * **A table of results** — read `on` **once**, run the first row it falls in,
+   * and run nothing if no row does (unless there is an `otherwise` row). The
+   * Deck of Many Things shape: `Roll a d20.` with a line per result.
+   *
+   * Reading `on` once is the point of the node. Rows that were ordinary guarded
+   * steps would each re-read "the latest roll", so a row that itself rolled would
+   * change what the rows after it saw.
+   */
+  | { readonly kind: 'table'; readonly on: ValueIR; readonly rows: readonly TableRowIR[] }
+  /**
+   * **Keep a value under a name** for the rest of this resolution — "Store that
+   * value as AttackerRoll." The value is evaluated *now*, so it stays what it was
+   * when stored even after a later roll. A name is stored once.
+   */
+  | { readonly kind: 'store'; readonly name: string; readonly value: ValueIR }
+  /**
+   * **Give a zone's cards an ability** — "Cards in your boxed zone have Open
+   * Present for each opponent." The ability is a sibling in the same document,
+   * named by its `id`; the zone is an abstract role mapped through
+   * `BindOptions.aliases`. It adds to what the zone already gives and replaces who
+   * may use *that* ability if it was already given. Standing state set while the
+   * game runs, like a viewer list.
+   */
+  | {
+      readonly kind: 'zoneAbility';
+      readonly zone: string;
+      /**
+       * Whose instances of a per-player zone, `shared` for a table-wide one, or
+       * `this` inside a `ZoneSectionIR` — the zone the section is about, whose owner
+       * is the "you" of `users`.
+       */
+      readonly owners: ChoosersIR | 'shared' | 'this';
+      /** The `id` of an ability in this document. */
+      readonly ability: string;
+      /** Who may use it. Ignored when `remove` is set. */
+      readonly users: ChoosersIR;
+      /**
+       * Take the ability **away** instead — "Cards in this zone no longer have Open
+       * Present." Removes it for everyone it was given to.
+       */
+      readonly remove?: true;
+    }
+  /**
+   * **Reveal this card** — show the card an ability is hosted on to every player.
+   * Only meaningful in an ability a zone or an effect gave a card (see
+   * `AbilityContext.host`); anywhere else it is an error at run time.
+   */
+  | { readonly kind: 'revealCard' }
+  /**
+   * **Cast this card if it can be**, else (optionally) move it to its owner's
+   * `otherwise` zone. Whether it can be cast is the game's to say (cost, targets),
+   * and a cast reveals the card by putting it on the public stack. The zone is an
+   * abstract role mapped through `BindOptions.aliases`.
+   */
+  | { readonly kind: 'castCard'; readonly otherwise?: string }
+  /** **Move this card** to its owner's `to` zone (an abstract role). */
+  | {
+      readonly kind: 'moveCard';
+      readonly to: string;
+      /** Written "the Suspend zone" rather than "its owner's Suspend" — the same place. */
+      readonly article?: 'the';
+      /** `with 5 counters on it` — put on the card as it arrives. */
+      readonly counters?: { readonly count: number; readonly kind?: string };
+    }
+  /**
+   * **Move cards** — `Move the top 3 cards from your library to your hand.` Takes cards
+   * out of one zone (`from`) and puts them in another (`to`). Zones are abstract roles
+   * mapped through `BindOptions.aliases`.
+   */
+  | {
+      readonly kind: 'moveCards';
+      readonly select: CardSelectorIR;
+      readonly from: CardSourceIR;
+      readonly to: ZoneRefIR;
+      /** The moved cards are put down in an order the controller chooses. */
+      readonly order?: CardOrderIR;
+      /** With `any number of …`: where the cards not picked go. */
+      readonly rest?: RestIR;
+    }
+  /**
+   * **Reveal cards** — `Reveal all cards castable by target opponent.` Shows the selected
+   * cards to every player, for as long as they stay where they are.
+   */
+  | { readonly kind: 'revealCards'; readonly select: CardSelectorIR; readonly from: CardSourceIR }
+  /** **Remove counters** — `Remove a counter from all cards in this zone.` From each card, up to `count`. */
+  | {
+      readonly kind: 'removeCounters';
+      readonly count: number;
+      readonly counterKind?: string;
+      readonly select: CardSelectorIR;
+      readonly from: ZoneRefIR;
+    }
+  /**
+   * **Cast cards** — `Cast all cards with no counters from this zone without paying their cost.`
+   * Each is cast by the zone's owner (or the controller), if it can be.
+   */
+  | { readonly kind: 'castCards'; readonly select: CardSelectorIR; readonly from: ZoneRefIR; readonly free?: true }
+  /**
+   * **Separate a pile into two** — `Target opponent separates Pool into Fact and Fiction.` `chooser`
+   * picks which cards of `from` make the first pile; the rest make the second. Both are
+   * temporary zones.
+   */
+  | { readonly kind: 'split'; readonly chooser: 'you' | 'opponent'; readonly from: ZoneRefIR; readonly into: readonly [string, string] }
+  /**
+   * **Choose one of two piles** — `You choose Fact or Fiction.` The pile picked becomes
+   * `@chosen` and the other `@other`, for the sentences that follow.
+   */
+  | { readonly kind: 'choosePile'; readonly options: readonly [string, string] }
+  /**
+   * **Draw cards** — `count` cards from the top of each named player's library to
+   * their hand. A function of a player and a number, `draw(player, count)`; the
+   * game may supply its own (fatigue, a full hand) through `BindOptions.draw`.
+   */
+  | { readonly kind: 'draw'; readonly count: ValueIR; readonly players: PlayerListIR }
+  /**
+   * **Scry** — `scry(player, count)` (or, with `surveil`, `surveil(player, count)` — the cards not kept
+   * on top go to the player's garbage instead of the bottom): the player looks at the top `count` cards of their
+   * library, puts any number on the bottom, and puts the rest back on top in the order
+   * they choose.
+   */
+  | { readonly kind: 'scry'; readonly count: ValueIR; readonly players: PlayerListIR; readonly surveil?: true }
+  /**
+   * **Play a contest** — `Each player plays Rock Paper Scissors.` Every player commits one of
+   * the contest's options face down, then they are revealed together. Players whose option beats
+   * another's and is beaten by none are the **winners**; whose option is beaten and beats none,
+   * the **losers**. The sentences that follow can act on `the winners` and `the losers`.
+   */
+  | { readonly kind: 'play'; readonly players: ContestPlayersIR; readonly contest: ContestIR }
+  /**
+   * **Create a creature** — `The winners create a Giant Golem.` Each of the players gets a new
+   * creature of that definition, in play under their control. The definition (`Creature Giant Golem
+   * 6/6`) is the game's to know; the IR only names it.
+   */
+  | { readonly kind: 'create'; readonly players: PlayerListIR; readonly creature: string }
+  /** Opens a sealed round: every answer becomes readable at once. */
+  | { readonly kind: 'reveal'; readonly round: string }
+  /**
+   * Moves what each chooser picked in `round` into **their own** `to` zone —
+   * "each player puts the card they chose into their garbage". The zone is an
+   * abstract role, mapped through `BindOptions.aliases` like `discover`'s.
+   */
+  | { readonly kind: 'moveChosen'; readonly round: string; readonly to: string }
   /** `You win the game.` / `All players lose the game.` */
   | { readonly kind: 'result'; readonly players: 'you' | 'all'; readonly win: boolean };
+
+/**
+ * One line of a table: the results it covers and what happens for them.
+ *
+ * `min`..`max` is inclusive; `max: null` is open-ended ("15 or more"). An
+ * `otherwise` row covers whatever no other row does and ignores `min`/`max`.
+ * `steps` are ordinary steps — each may have its own `If`, `You may`, and so on.
+ */
+export interface TableRowIR {
+  readonly min: number;
+  readonly max: number | null;
+  readonly otherwise?: boolean;
+  readonly steps: readonly StepIR[];
+}
+
+/**
+ * Who answers a `choose`. `each` is every player in turn order starting with
+ * the ability's controller; `opponents` is every player but the controller.
+ */
+export type ChoosersIR = 'you' | 'each' | 'opponents';
+
+/** The list of players a contest is played by ("player 1" is the first). */
+export type ContestPlayersIR = ChoosersIR | 'you-and-opponent';
+
+/** Who an effect is about: the usual players, or the outcome of the last contest played. */
+export type PlayerListIR = ChoosersIR | 'winners' | 'losers';
+
+/** One rule of a contest, read in order; the first that fits decides the result. */
+export type ContestRuleIR =
+  /** `If both players choose the same option, it is a tie.` — nobody wins or loses. */
+  | { readonly kind: 'tie' }
+  /** `If player 1 chooses Rock and player 2 chooses Scissors, player 1 wins and player 2 loses.` */
+  | {
+      readonly kind: 'when';
+      readonly picks: readonly { readonly player: number; readonly option: string }[];
+      readonly winners: readonly number[];
+      readonly losers: readonly number[];
+    }
+  /** `Otherwise player 2 wins and player 1 loses.` */
+  | { readonly kind: 'otherwise'; readonly winners: readonly number[]; readonly losers: readonly number[] };
+
+/**
+ * A game played by a list of players: each commits one of `options` face down, they are turned over
+ * together, and the `rules` — read in order — say who won and who lost. "Player 1" is the first of
+ * the list. `playerCount`, when given, is how many must play.
+ */
+export interface ContestIR {
+  readonly name: string;
+  readonly playerCount?: number;
+  readonly options: readonly string[];
+  readonly rules: readonly ContestRuleIR[];
+}
+
+/**
+ * The order an open round of `each` player answers in:
+ * - `caster-first` — the caster, then round the table in seating order;
+ * - `caster-last` — round the table in seating order, ending with the caster;
+ * - `random` — a randomly chosen start (a die roll, so a table rolls a real one),
+ *   then round the table in seating order;
+ * - `reverse` — the reverse of the seating order; the caster's seat plays no part.
+ */
+export type ChooseOrderIR = 'caster-first' | 'caster-last' | 'random' | 'reverse';
+
+/**
+ * What a chooser picks: a card from one of their own zones, a whole number, or
+ * one of a list of names (a vote).
+ */
+export type PickIR =
+  | { readonly kind: 'card'; readonly from: string }
+  | { readonly kind: 'label'; readonly options: readonly string[] }
+  | { readonly kind: 'number'; readonly min: ValueIR; readonly max: ValueIR };
+
+/**
+ * Which cards of a zone a move takes.
+ *
+ * - `top` / `bottom` — the first `count` from that end (an ordered zone's order; any
+ *   zone has a stable one);
+ * - `choose` — the controller picks `count` ("a card", "2 cards");
+ * - `random` — `count` taken at random, from the game's seeded stream;
+ * - `all` — every card there.
+ *
+ * `cardKind` narrows to creature cards or spell cards.
+ */
+export interface CardSelectorIR {
+  readonly how: 'top' | 'bottom' | 'choose' | 'random' | 'all';
+  readonly count: number;
+  readonly cardKind?: 'creature' | 'spell';
+  /**
+   * `any number of …` — the selector only names the pool (`the top 3 cards`) and the
+   * controller picks any number of them (none, some, all). The ones not picked are "the
+   * rest", which a move may place too.
+   */
+  readonly any?: true;
+  /** `with no counters` — only cards that carry none. */
+  readonly counters?: 'none';
+}
+
+/**
+ * A zone and whose it is: `you` (the controller's), `owner` (each moved card's own
+ * owner — only for a destination), `opponent` (an opponent: the only one, or the one
+ * the controller picks), `opponents` (each opponent's), `each` (every player's), or
+ * `shared` (a zone nobody owns, such as `play` or the stack).
+ */
+export interface ZoneRefIR {
+  readonly whose: 'you' | 'owner' | 'opponent' | 'opponents' | 'each' | 'shared' | 'temporary' | 'this';
+  /** For `temporary`, the pile's name — or `@chosen` / `@other`, the two piles of the last choice. */
+  readonly zone: string;
+  /** Where in an ordered zone the cards land: `the top of your deck`, `the bottom of your deck`. */
+  readonly position?: 'top' | 'bottom';
+}
+
+/** A group of moved cards placed as the player chooses: "in the order of your choice". */
+export type CardOrderIR = 'chosen';
+
+/** `and the rest on the top of your deck in the order of your choice` — where the cards not picked go. */
+export interface RestIR {
+  readonly to: ZoneRefIR;
+  readonly order?: CardOrderIR;
+}
+
+/**
+ * Every card a player could cast right now, wherever it is — their hand, and a stolen pile
+ * they are holding. What counts is the game's to say (`engineCastable`); the IR only asks.
+ */
+export interface CastableRefIR {
+  readonly castableBy: 'you' | 'opponent' | 'opponents' | 'each';
+}
+
+/** Where cards are taken from: one kind of zone, or whatever a player can cast. */
+export type CardSourceIR = ZoneRefIR | CastableRefIR;
 
 /** True for the effects that act on entities (i.e. carry a `query`). */
 export function isEntityEffect(
   effect: EffectIR,
 ): effect is Extract<EffectIR, { query: EntityQueryIR }> {
-  return effect.kind !== 'result';
+  return (
+    effect.kind !== 'result' &&
+    effect.kind !== 'discover' &&
+    effect.kind !== 'roll' &&
+    effect.kind !== 'store' &&
+    effect.kind !== 'zoneAbility' &&
+    effect.kind !== 'revealCard' &&
+    effect.kind !== 'castCard' &&
+    effect.kind !== 'moveCard' &&
+    effect.kind !== 'moveCards' &&
+    effect.kind !== 'revealCards' &&
+    effect.kind !== 'removeCounters' &&
+    effect.kind !== 'castCards' &&
+    effect.kind !== 'split' &&
+    effect.kind !== 'play' &&
+    effect.kind !== 'create' &&
+    effect.kind !== 'choosePile' &&
+    effect.kind !== 'table' &&
+    effect.kind !== 'draw' &&
+    effect.kind !== 'scry' &&
+    effect.kind !== 'choose' &&
+    effect.kind !== 'reveal' &&
+    effect.kind !== 'moveChosen'
+  );
 }
 
 /**
@@ -530,6 +888,21 @@ export interface DocumentIR {
   readonly abilities: readonly AbilityIR[];
   readonly buffs: readonly BuffIR[];
   readonly triggers: readonly TriggerIR[];
+  /** Statements about one of the game's zones; absent in a document with none. */
+  readonly zones?: readonly ZoneSectionIR[];
+}
+
+/**
+ * Statements about **one zone** ("Cards in this zone have Open Present…"), applied
+ * by the host when the game is set up. For a per-player zone they run once for each
+ * player's instance, with that player as "you".
+ */
+export interface ZoneSectionIR {
+  /** The zone, as an abstract role mapped through `BindOptions.aliases`. */
+  readonly zone: string;
+  readonly steps: readonly StepIR[];
+  /** Standing rules of the zone: `At the start of your turn, …` runs `steps` at that event. */
+  readonly triggers?: readonly { readonly event: string; readonly yours: boolean; readonly steps: readonly StepIR[] }[];
 }
 
 /**

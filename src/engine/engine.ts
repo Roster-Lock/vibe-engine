@@ -27,13 +27,16 @@
  * await engine.apply([damage(goblin, 20, hero)]);
  * ```
  */
-import type { Ability, StatContext, TargetPattern, Targeting } from './ability/index.js';
-import type { Action, ActionDirection, ActionTransformer, DiscoverAction, GaugeAction, TransformForm } from './actions.js';
+import type { Ability, ManualAbility, StatContext, TargetPattern, Targeting } from './ability/index.js';
+import type { Action, ActionDirection, ActionTransformer, DiscoverAction, GaugeAction, RollAction, RollAdjust, TransformForm } from './actions.js';
+import { assertValidRoll, createDiceRng, type Roller } from './dice.js';
+import { GasMeter, OutOfGasError, type GasOptions } from './gas.js';
+import { Grants, SEE, type CapabilityDef, type Grant, type GrantEnd } from './grants.js';
 import { ActionRegistry } from './action-registry.js';
 import type { TargetWho } from './contracts.js';
 import { OutcomeRegistry } from './outcome.js';
 import { TargetingRegistry } from './targeting.js';
-import { addBuff as addBuffAction, damage as damageAction, heal as healAction, move as moveAction, removeBuff as removeBuffAction } from './actions.js';
+import { addBuff as addBuffAction, damage as damageAction, heal as healAction, move as moveAction, removeBuff as removeBuffAction, roll as rollAction } from './actions.js';
 import { Character, type FormChange, type TransformPop } from './character.js';
 import type {
   BuffDestroyReason,
@@ -49,7 +52,7 @@ import type {
   ZoneChangedEvent,
 } from './events.js';
 import { Gauge, type GaugeSba } from './gauge.js';
-import { GARBAGE, IN_PLAY, ZoneRegistry, type Entity, type Zone, type ZonePosition, type ZoneTransition } from './zone.js';
+import { GARBAGE, IN_PLAY, ZoneRegistry, type Entity, type Zone, type ZoneEnd, type ZonePosition, type ZoneTransition } from './zone.js';
 export type { GaugeSba } from './gauge.js';
 export type { DeferredTrigger } from './trigger-stack.js';
 export {
@@ -71,6 +74,10 @@ import { Buff, type Status } from './status/index.js';
 import { slugify } from './status/shared.js';
 import {
   AutoChooser,
+  SealedRound,
+  duplicateIds,
+  resolveLabel,
+  resolveWritten,
   validateAnswer,
   type ChoiceAnswer,
   type ChoiceRequest,
@@ -190,6 +197,12 @@ export interface EngineOptions {
   /** Cap on nested action chains (guards against infinite trigger loops). Defaults to 100. */
   readonly maxActionDepth?: number;
   /**
+   * The gas budget — a cap on the total *work* one scope (a move, an ability, a
+   * top-level `apply`) may do, so a loop that never ends ends anyway. Defaults to
+   * 10,000 units a scope. `false` turns it off. See `src/engine/gas.ts`.
+   */
+  readonly gas?: GasOptions | false;
+  /**
    * What order triggers run in, and when (trigger-scheduler.ts).
    *
    * Omit it and everything runs the moment the resolution unit completes,
@@ -206,6 +219,13 @@ export interface EngineOptions {
    * the players' secrets — same seed + same game state ⇒ same order.
    */
   readonly seed?: string;
+  /**
+   * Where dice results come from. Defaults to a seeded stream of its own
+   * (derived from `seed`, separate from the trigger shuffle's). Replace it for
+   * physical play (the result of the real die) or an online server (a secure
+   * source). See `src/engine/dice.ts`.
+   */
+  readonly roller?: Roller;
 }
 
 export class GameEngine {
@@ -234,6 +254,10 @@ export class GameEngine {
   #seed: string;
   /** The PRNG the trigger shuffle draws from, seeded from `#seed`. */
   #rng: () => number;
+  /** The PRNG dice draw from — its own stream, so a roll never shifts a shuffle. */
+  #diceRng: () => number;
+  /** A replacement for the seeded dice source, if the game set one. */
+  #roller: Roller | undefined;
 
   /**
    * Zones, and which zone every registered entity is in (zone.ts). Replaces
@@ -244,6 +268,11 @@ export class GameEngine {
   readonly #zones = new ZoneRegistry();
   /** The `play` zone instance — where a registered character starts. */
   readonly #play: Zone;
+
+  /** Who may do what to which single card, on top of its zone's rule (`grants.ts`). */
+  readonly #grants = new Grants((grant) => {
+    void this.emit({ type: 'grant:removed', capability: grant.capability, players: grant.players, count: 1 });
+  });
 
   /**
    * Moves an entity between zones and **collects** the transition for
@@ -256,6 +285,8 @@ export class GameEngine {
   #moveZone(entity: Entity, to: Zone, position?: ZonePosition): ZoneTransition | undefined {
     const transition = this.#zones.move(entity, to, position);
     if (!transition) return undefined;
+    // A card that changes zone is a new object: "while it is yours" ends here.
+    this.#grants.entityLeftZone(entity);
     this.#pendingZoneMoves.push(transition);
     // Entering play from anywhere else **realizes** the entity's gauges.
     if (to.group === IN_PLAY && transition.from?.group !== IN_PLAY && entity instanceof Character) {
@@ -341,7 +372,280 @@ export class GameEngine {
    * destination, and there isn't one.
    */
   removeEntity(entity: Entity): boolean {
+    this.#grants.entityRemoved(entity);
     return this.#zones.remove(entity);
+  }
+
+  /* ------------------------------ visibility ------------------------------ */
+
+  /**
+   * **Who may see a custom zone's cards**, replacing its viewer list. A real
+   * `Player[]`: the keyword that calls this works out "players other than its
+   * owner" (or "target player") from the game, so the zone itself never learns
+   * what a teammate or an opponent is. Only a `'custom'` zone has a list to set.
+   */
+  setViewers(zone: Zone, players: readonly Player[]): void {
+    if (zone.visibility !== 'custom') {
+      throw new Error(
+        `setViewers: zone "${zone.key}" is "${zone.visibility}", not "custom" — only a custom zone has a viewer list`,
+      );
+    }
+    zone._viewers = [...new Set(players)];
+  }
+
+  /**
+   * **Shows one card to some players**, on top of what its zone allows — a grant
+   * of the `see` capability. See `grant` for the lifetimes.
+   */
+  showTo(entity: Entity, players: readonly Player[], options: { until?: GrantEnd; source?: EventSource } = {}): Grant {
+    return this.grant(entity, players, SEE, options);
+  }
+
+  /* -------------------------------- grants -------------------------------- */
+
+  /**
+   * **Declares a capability** a game can grant — `'cast'`, `'play'`, `'activate'`.
+   * The engine reads none of them; it only remembers who holds which. `see` is
+   * built in.
+   *
+   * A capability implies nothing by default: permission to act on a card is not
+   * permission to look at it (a Boxed Present is cast by opening it, and casting it
+   * is what reveals it). A game that wants a link says so — `{ implies: ['see'] }` —
+   * and then granting the one grants the other, to the same players and for as long.
+   */
+  declareCapability(name: string, def: CapabilityDef = {}): void {
+    this.#grants.declare(name, def);
+  }
+
+  /**
+   * **Gives players a capability on one card**, announced as `grant:added`
+   * without naming the card.
+   *
+   * `until` is how long: `'zone-change'` (default — while the card stays where it
+   * is), `'resolution'` (inside `engine.resolution(...)`, for one effect),
+   * `'turn-end'`, or `'manual'` (until `end()`). `source` is who granted it, so
+   * `revokeGrants(source)` ends exactly that source's grants and leaves any other
+   * effect's permission on the same card alone. Several grants are a union.
+   */
+  grant(
+    entity: Entity,
+    players: readonly Player[],
+    capability: string,
+    options: { until?: GrantEnd; source?: EventSource } = {},
+  ): Grant {
+    if (!this.#zones.has(entity)) throw new Error(`grant: "${entity.name}" is not in the game`);
+    const grant = this.#grants.add(entity, players, capability, options.until ?? 'zone-change', options.source);
+    void this.emit({ type: 'grant:added', capability, players: grant.players, count: 1 });
+    return grant;
+  }
+
+  /* ---------------------------- card abilities ---------------------------- */
+
+  /**
+   * **Sets the abilities every card in `zone` has while it is there**, and who may
+   * use them — replacing both lists. A card has the abilities it was printed with
+   * plus whatever its current zone or an effect gives it: a Boxed Present zone
+   * gives every card in it *Open Present*, an ability no card printed.
+   *
+   * Like the viewer list this is standing state set while the game runs (by a
+   * keyword or a rule), not part of the zone's declaration, so it can change
+   * mid-game. A card that enters has the abilities; one that leaves loses them.
+   */
+  setZoneAbilities(zone: Zone, abilities: readonly Ability[], users: readonly Player[]): void {
+    const manual = abilities.map((ability) => {
+      if (ability.kind !== 'manual') {
+        throw new Error(`setZoneAbilities: "${ability.name}" is not a manual ability (kind: ${ability.kind})`);
+      }
+      return ability;
+    });
+    zone._abilities = manual.map((ability) => ({ ability, users: [...new Set(users)] }));
+  }
+
+  /**
+   * **Adds one ability to a zone's cards**, for some players — "Cards in your
+   * boxed zone have Open Present for each opponent." Unlike `setZoneAbilities` it
+   * keeps what the zone already gives. Giving the same ability again (same `id`) replaces who
+   * may use it rather than listing it twice.
+   */
+  addZoneAbility(zone: Zone, ability: Ability, users: readonly Player[]): void {
+    if (ability.kind !== 'manual') {
+      throw new Error(`addZoneAbility: "${ability.name}" is not a manual ability (kind: ${ability.kind})`);
+    }
+    const entry = { ability, users: [...new Set(users)] };
+    // Matched by id, not object: a document compiled again (a reload) makes new ability
+    // objects, and the fresh one should replace the stale one, not sit beside it.
+    const at = zone._abilities.findIndex((existing) => existing.ability.id === ability.id);
+    if (at >= 0) zone._abilities[at] = entry;
+    else zone._abilities.push(entry);
+  }
+
+  /* ------------------------------- counters ------------------------------ */
+
+  readonly #counters = new WeakMap<Entity, Map<string, number>>();
+
+  /** How many counters of `kind` are on `entity` (zero if none). A counter is a number a card carries; the engine reads none of them. */
+  counters(entity: Entity, kind = 'counter'): number {
+    return this.#counters.get(entity)?.get(kind) ?? 0;
+  }
+
+  /** Every counter kind on `entity` with a count above zero. */
+  countersOn(entity: Entity): ReadonlyMap<string, number> {
+    return new Map([...(this.#counters.get(entity) ?? [])].filter(([, n]) => n > 0));
+  }
+
+  /** Puts `count` counters of `kind` on `entity`. */
+  addCounters(entity: Entity, count: number, kind = 'counter'): void {
+    if (!Number.isInteger(count) || count < 0) throw new Error(`addCounters: ${count} is not a whole number of counters`);
+    const have = this.#counters.get(entity) ?? new Map<string, number>();
+    have.set(kind, (have.get(kind) ?? 0) + count);
+    this.#counters.set(entity, have);
+    this.#stateVersion += 1;
+  }
+
+  /** Takes up to `count` counters of `kind` off `entity`; returns how many came off. */
+  removeCounters(entity: Entity, count: number, kind = 'counter'): number {
+    const have = this.#counters.get(entity);
+    const removed = Math.min(Math.max(count, 0), have?.get(kind) ?? 0);
+    if (have && removed > 0) {
+      have.set(kind, have.get(kind)! - removed);
+      this.#stateVersion += 1;
+    }
+    return removed;
+  }
+
+  /**
+   * **Takes one ability away from a zone's cards** — "Cards in this zone no longer
+   * have Open Present." It removes what `addZoneAbility` / `setZoneAbilities` gave,
+   * for everyone it was given to. Returns whether the zone had it.
+   *
+   * It does not touch an ability a card was *granted* (`grantAbility`) — that has its
+   * own lifetime and source — nor one the card printed.
+   */
+  removeZoneAbility(zone: Zone, ability: Ability): boolean {
+    const at = zone._abilities.findIndex((entry) => entry.ability.id === ability.id);
+    if (at < 0) return false;
+    zone._abilities.splice(at, 1);
+    return true;
+  }
+
+  /**
+   * **Gives one card an ability** for some players, for a lifetime — the effect
+   * form of `setZoneAbilities` ("until end of turn, that card has *Cast this
+   * card*"). A grant like any other: `source`, `until`, ended by `revokeGrants`.
+   */
+  grantAbility(
+    entity: Entity,
+    ability: Ability,
+    players: readonly Player[],
+    options: { until?: GrantEnd; source?: EventSource } = {},
+  ): Grant {
+    if (ability.kind !== 'manual') {
+      throw new Error(`grantAbility: "${ability.name}" is not a manual ability (kind: ${ability.kind})`);
+    }
+    if (!this.#zones.has(entity)) throw new Error(`grantAbility: "${entity.name}" is not in the game`);
+    const capability = `ability:${ability.id}`;
+    this.#grants.declare(capability);
+    const grant = this.#grants.add(entity, players, capability, options.until ?? 'zone-change', options.source, ability);
+    void this.emit({ type: 'grant:added', capability, players: grant.players, count: 1 });
+    return grant;
+  }
+
+  /**
+   * The abilities `player` may use **on this card** right now: those its zone gives
+   * (when `player` is one of the zone's users) and those an effect granted them.
+   */
+  abilitiesFor(player: Player, entity: Entity): readonly ManualAbility[] {
+    const zone = this.#zones.zoneOf(entity);
+    const found = [...this.#grants.abilitiesFor(player, entity)];
+    for (const entry of zone?.abilityEntries ?? []) {
+      if (entry.users.includes(player) && !found.includes(entry.ability)) found.unshift(entry.ability);
+    }
+    return found;
+  }
+
+  /**
+   * **A player uses an ability a card has been given.** The player must be one who
+   * may (`abilitiesFor`); `self` is their first living character and `host` is the
+   * card, so "this card" in the ability means it. The actions flow through the
+   * pipeline like any ability's.
+   */
+  async useCardAbility(
+    player: Player,
+    entity: Entity,
+    ability: Ability,
+    targeting: Targeting = { targets: [] },
+  ): Promise<void> {
+    return this.metered(`ability ${ability.name}`, () => this.#useCardAbility(player, entity, ability, targeting));
+  }
+
+  async #useCardAbility(player: Player, entity: Entity, ability: Ability, targeting: Targeting): Promise<void> {
+    if (ability.kind !== 'manual' || !this.abilitiesFor(player, entity).includes(ability)) {
+      throw new Error(`useCardAbility: ${player.name} may not use "${ability.name}" on "${entity.name}"`);
+    }
+    const self = player.livingCharacters[0];
+    if (!self) throw new Error(`useCardAbility: ${player.name} has no character to use "${ability.name}"`);
+    const ctx = { self, engine: this, host: entity };
+    if (ability.available && !ability.available(ctx)) {
+      throw new Error(`useCardAbility: "${ability.name}" cannot be used right now`);
+    }
+    const pool = this.validTargets(ability.targeting, self);
+    const invalid = targeting.targets.filter((target) => !pool.includes(target));
+    if (invalid.length > 0) {
+      throw new Error(
+        `useCardAbility: "${ability.name}" cannot target ${invalid.map((t) => `"${t.name}"`).join(', ')} — outside its targeting pattern`,
+      );
+    }
+    const actions = await ability.cast(ctx, targeting);
+    if (actions.length > 0) await this.apply(actions, { source: self });
+  }
+
+  /** Whether a live grant lets `player` do `capability` to this card. */
+  mayAct(player: Player, entity: Entity, capability: string): boolean {
+    return this.#grants.allows(player, entity, capability);
+  }
+
+  /** Ends every grant `source` made, and only those. */
+  revokeGrants(source: EventSource): void {
+    this.#grants.revokeFrom(source);
+  }
+
+  /** Runs `fn` as one resolution: `'resolution'` grants made inside end when it does. */
+  resolution<T>(fn: () => Promise<T> | T): Promise<T> {
+    return this.#grants.scope(fn);
+  }
+
+  /**
+   * **Whether `player` may see this card** — its zone's rule, or a live grant.
+   * This is the question a view is built from. A zone's *size* is not hidden by
+   * any rule, only its contents.
+   */
+  canSee(player: Player, entity: Entity): boolean {
+    const zone = this.#zones.zoneOf(entity);
+    if (!zone) return false;
+    return this.zoneShows(player, zone) || this.#grants.allows(player, entity, SEE);
+  }
+
+  /**
+   * Whether `zone`'s **own rule** shows its cards to `player` — public, the owner's
+   * own, or on a custom zone's viewer list — ignoring any per-card grant. A view
+   * uses it to tell whether a player could see a card where it *was*.
+   */
+  zoneShows(player: Player, zone: Zone): boolean {
+    switch (zone.visibility) {
+      case 'public':
+        return true;
+      case 'owner':
+        return zone.owner === player;
+      case 'custom':
+        return zone.viewers.includes(player);
+      case 'hidden':
+        return false;
+    }
+  }
+
+  /** The cards of a zone `player` may see, in the zone's order. */
+  visibleMembers(zone: Zone, player: Player): readonly Entity[] {
+    return zone.members.filter((member) => this.canSee(player, member));
   }
 
   /**
@@ -375,6 +679,76 @@ export class GameEngine {
   shuffleZone(zoneId: string, owner?: Player): void {
     const zone = owner ? this.#zones.zone(zoneId, owner) : this.#zones.unownedZone(zoneId);
     if (zone) this.#zones.shuffle(zone, () => this.random());
+  }
+
+  /**
+   * **The `nth` entity (1-based) from one end of an ordered zone**, without
+   * moving it — "the seventh card from the top". Like `reveal`, a look: nothing
+   * is announced. Pair it with `moveTo` to *get* the card ("put the 7th card from
+   * the top into your hand"). Undefined when the zone is unordered or too short.
+   */
+  peek(zoneId: string, nth: number, options: { owner?: Player; from?: ZoneEnd } = {}): Entity | undefined {
+    return this.#orderedZone(zoneId, options.owner)?.nth(nth, options.from);
+  }
+
+  /**
+   * **The first `count` entities from one end** of an ordered zone, in zone
+   * order — the section a scry looks at. Announces nothing; see `peek`.
+   */
+  peekSection(zoneId: string, count: number, options: { owner?: Player; from?: ZoneEnd } = {}): readonly Entity[] {
+    return this.#orderedZone(zoneId, options.owner)?.section(count, options.from) ?? [];
+  }
+
+  /**
+   * Moves an entity **within its ordered zone**: top to bottom, bottom to top,
+   * "third from the top". Announces nothing — it never changes zone, so no
+   * `zone:changed` — and is not gated by the action pipeline, like a shuffle.
+   * Returns false when the entity is not in an ordered zone.
+   */
+  reposition(entity: Entity, position: ZonePosition): boolean {
+    const moved = this.#zones.reposition(entity, position);
+    if (moved) this.#stateVersion += 1;
+    return moved;
+  }
+
+  /**
+   * **Commits a scry-style rearrangement** of the first `count` entities of an
+   * ordered zone: `top` go back on top in the order given, `bottom` go under.
+   * The two lists must be exactly that section (see `ZoneRegistry.arrange`).
+   * Announces nothing.
+   */
+  arrange(
+    zoneId: string,
+    count: number,
+    placement: { top?: readonly Entity[]; bottom?: readonly Entity[] },
+    options: { owner?: Player; from?: ZoneEnd } = {},
+  ): void {
+    const zone = this.#orderedZone(zoneId, options.owner);
+    if (!zone) throw new Error(`arrange: no ordered zone "${zoneId}"`);
+    this.#zones.arrange(zone, count, placement, options.from);
+    this.#stateVersion += 1;
+  }
+
+  /**
+   * **Shuffles an entity into an ordered zone** — it goes in as a real move
+   * (replacement effects, restrictions and `zone:changed` all apply), then the
+   * zone is shuffled, so where it landed is irrelevant. If the entity is already
+   * in the zone it is just shuffled with the rest.
+   */
+  async shuffleIn(
+    entity: Entity,
+    zoneId: string,
+    options: { owner?: Player; reason?: string; source?: EventSource } = {},
+  ): Promise<void> {
+    await this.moveTo(entity, zoneId, { ...options, position: 'bottom' });
+    // Shuffle where it actually landed — a replacement effect may have redirected it.
+    const landed = this.#zones.zoneOf(entity);
+    if (landed) this.#zones.shuffle(landed, () => this.random());
+  }
+
+  #orderedZone(zoneId: string, owner?: Player): Zone | undefined {
+    const zone = owner ? this.#zones.zone(zoneId, owner) : this.#zones.unownedZone(zoneId);
+    return zone?.ordered ? zone : undefined;
   }
 
   /**
@@ -440,11 +814,107 @@ export class GameEngine {
     return this.#ask(request);
   }
 
+  /**
+   * **Asks several players at once** — the "everyone chooses, then reveal" round.
+   *
+   * With `sealed: true`, every request goes out concurrently, each to its own
+   * `chooser` (which must be a distinct player: a sealed round is *between*
+   * players). A chooser answers without seeing anyone else's, and each answer is
+   * held in the returned `SealedRound` as it arrives, announced only as
+   * `choice:ready` — never its content. The promise resolves when **every
+   * chooser** is ready; players with no request are not waited on. Nothing is
+   * readable until `revealRound`.
+   *
+   * With `sealed: false` the requests are asked **one at a time in the order
+   * given**, each chooser seeing the state the earlier answers left, and the
+   * round comes back already revealed. That is today's sequential behaviour; it
+   * is here so a card's wording ("in secret" or not) is the only thing that
+   * decides which.
+   */
+  async askAll(requests: readonly ChoiceRequest[], options: { sealed: boolean }): Promise<SealedRound> {
+    const choosers = requests.map((request) => request.chooser);
+    if (options.sealed) {
+      const players = choosers.filter((chooser): chooser is Player => chooser !== undefined);
+      if (players.length !== choosers.length) {
+        throw new Error('askAll: every request in a sealed round needs a chooser');
+      }
+      if (new Set(players).size !== players.length) {
+        throw new Error('askAll: a player can answer a sealed round only once');
+      }
+    }
+    for (const request of requests) {
+      if (request.kind === 'label') {
+        const distinct = new Set(request.options);
+        if (request.options.length < 2 || distinct.size !== request.options.length) {
+          throw new Error(`askAll: "${request.prompt}" needs at least two different options to choose between`);
+        }
+      }
+      if (request.kind !== 'select') continue;
+      const repeated = duplicateIds(request.options);
+      if (repeated.length > 0) {
+        throw new Error(
+          `askAll: "${request.prompt}" offers more than one option with the id ${repeated.map((id) => `"${id}"`).join(', ')} — every card needs a unique id`,
+        );
+      }
+    }
+    const round = new SealedRound(requests);
+    if (!options.sealed) {
+      // Open choices are validated as they are made, and a bad one is a bug.
+      const cast: { player: Player; option: string }[] = [];
+      for (const request of requests) {
+        // Each voter sees the votes already cast.
+        const answer = await this.#ask(request.kind === 'label' ? { ...request, prior: [...cast] } : request);
+        if (request.chooser) round._commit(request.chooser, answer);
+        if (request.chooser && answer.kind === 'label') cast.push({ player: request.chooser, option: answer.value });
+      }
+      round._open();
+      return round;
+    }
+    // A commitment is judged at the reveal, not here: nobody learns that a
+    // face-down answer is invalid until it is turned over (see `SealedRound`).
+    await Promise.all(
+      requests.map(async (request) => {
+        const player = request.chooser!;
+        round._commit(player, await player.choose(request));
+        await this.emit({ type: 'choice:ready', player });
+      }),
+    );
+    return round;
+  }
+
+  /**
+   * Opens a sealed round: judges every commitment, announces the valid answers
+   * at once (`choice:revealed`), and announces each forfeit (`choice:forfeited`).
+   * Throws if some chooser is not ready yet, or if the round was already opened.
+   *
+   * Returns the players who forfeited — an invalid or vague commitment, or an
+   * attempt to change one. What that costs is the game's rule, not the
+   * engine's: the IR's `reveal` makes them lose the game.
+   */
+  async revealRound(round: SealedRound): Promise<readonly { readonly player: Player; readonly reason: string }[]> {
+    if (round.revealed) throw new Error('revealRound: this round is already revealed');
+    const forfeited = round._open();
+    await this.emit({ type: 'choice:revealed', answers: round.answers });
+    for (const { player, reason } of forfeited) await this.emit({ type: 'choice:forfeited', player, reason });
+    return forfeited;
+  }
+
   async #ask(request: ChoiceRequest): Promise<ChoiceAnswer> {
+    this.gas.spend('ask', request.kind);
     const answerer = request.chooser ?? this.#chooser;
     const answer = await answerer.choose(request);
     const problem = validateAnswer(request, answer);
     if (problem) throw new Error(`"${request.prompt}": ${problem}`);
+    // An open choice is made in view, so a written value is resolved on the
+    // spot and callers only ever see a pick.
+    if (request.kind === 'select' && answer.kind === 'written') {
+      const resolved = resolveWritten(request.options, answer.text);
+      return { kind: 'select', chosen: 'chosen' in resolved ? resolved.chosen : [] };
+    }
+    if (request.kind === 'label' && answer.kind === 'written') {
+      const resolved = resolveLabel(request.options, answer.text);
+      return { kind: 'label', value: 'value' in resolved ? resolved.value : request.options[0]! };
+    }
     return answer;
   }
 
@@ -547,19 +1017,29 @@ export class GameEngine {
    */
   #sbaCheckedThisApply = false;
 
+  /**
+   * How much work this scope has done and may still do. Open a scope around a unit of
+   * your own work with `metered`; the engine's own entry points already do.
+   */
+  readonly gas: GasMeter;
+
   constructor(options: EngineOptions = {}) {
+    this.gas = new GasMeter(options.gas === false ? { limit: Number.POSITIVE_INFINITY } : options.gas);
     this.#play = this.#zones.zone('play')!;
     this.#chooser = options.chooser ?? new AutoChooser();
     this.#onEvent = options.onEvent;
     this.#maxDepth = options.maxActionDepth ?? 100;
     this.#seed = options.seed ?? createRandomSeed();
     this.#rng = createPrng(hashString(this.#seed));
+    this.#diceRng = createDiceRng(this.#seed);
+    this.#roller = options.roller;
     this.#stack = new TriggerStack({
       rng: () => this.#rng(),
       validTargets: (pattern, self) => this.validTargets(pattern, self),
       apply: (actions, context) => this.apply(actions, context),
       context: (self, status, event) => ({ self, engine: this, status, event }),
       ask: (request) => this.#ask(request),
+      gas: this.gas,
       ...(options.scheduler ? { scheduler: options.scheduler } : {}),
     });
     // The built-in death rules live on every character's HP gauge (see
@@ -781,8 +1261,29 @@ export class GameEngine {
    * later, when the current resolution unit completes (`drainTriggers`).
    */
   async emit(event: GameEvent): Promise<void> {
-    this.#onEvent?.(event);
+    this.#notify(event);
     this.#stack.enqueue(event);
+    // "This turn" permissions end with the turn.
+    if (event.type === 'turn:end') this.#grants.turnEnded();
+  }
+
+  /**
+   * Listens to every event the engine announces, alongside the `onEvent` option.
+   * Returns a function that stops listening. A server uses it to give each connected
+   * player their own redacted copy of the stream.
+   */
+  observe(listener: (event: GameEvent) => void): () => void {
+    this.#observers.add(listener);
+    return () => {
+      this.#observers.delete(listener);
+    };
+  }
+
+  readonly #observers = new Set<(event: GameEvent) => void>();
+
+  #notify(event: GameEvent): void {
+    this.#onEvent?.(event);
+    for (const observer of this.#observers) observer(event);
   }
 
   /** How many triggers the scheduler is holding (diagnostics, tests, UI). */
@@ -803,6 +1304,7 @@ export class GameEngine {
   setSeed(seed: string): void {
     this.#seed = seed;
     this.#rng = createPrng(hashString(seed));
+    this.#diceRng = createDiceRng(seed);
   }
 
   /**
@@ -813,6 +1315,67 @@ export class GameEngine {
    */
   random(): number {
     return this.#rng();
+  }
+
+  /**
+   * Replaces where dice results come from — a table's physical die, or a
+   * server's secure source. Pass `undefined` to go back to the seeded stream.
+   */
+  setRoller(roller: Roller | undefined): void {
+    this.#roller = roller;
+  }
+
+  /**
+   * **Rolls dice through the pipeline** and returns the final results.
+   *
+   * Sugar over `apply([roll(...)])`, so replacement effects may change the dice
+   * or adjust the outcome, and `roll:made` is announced. Returns `[]` if the
+   * roll was blocked before it happened.
+   */
+  async roll(
+    count: number,
+    sides: number,
+    options: { source?: EventSource; reason?: string; adjust?: readonly RollAdjust[] } = {},
+  ): Promise<readonly number[]> {
+    let results: readonly number[] = [];
+    await this.apply(
+      [
+        rollAction(count, sides, {
+          ...(options.reason ? { reason: options.reason } : {}),
+          ...(options.source ? { source: options.source } : {}),
+          ...(options.adjust ? { adjust: options.adjust } : {}),
+          onRolled: (rolled) => {
+            results = rolled;
+          },
+        }),
+      ],
+      options.source ? { source: options.source } : {},
+    );
+    return results;
+  }
+
+  /** The body of the `roll` action: ask the roller, adjust, announce. */
+  async #roll(action: RollAction): Promise<void> {
+    const context = { source: action.source, reason: action.reason };
+    const dice = async (): Promise<readonly number[]> => {
+      const rolled = this.#roller
+        ? await this.#roller(action.count, action.sides, context)
+        : Array.from({ length: action.count }, () => 1 + Math.floor(this.#diceRng() * action.sides));
+      assertValidRoll(rolled, action.count, action.sides);
+      return rolled;
+    };
+    let results = await dice();
+    // Adjustments may exceed the die's faces ("add 1"), so they are not re-validated.
+    for (const adjust of action.adjust ?? []) results = await adjust(results, dice);
+    this.#stateVersion += 1;
+    action.onRolled?.(results);
+    await this.emit({
+      type: 'roll:made',
+      count: action.count,
+      sides: action.sides,
+      results,
+      ...(action.source ? { source: action.source } : {}),
+    });
   }
 
   /**
@@ -865,6 +1428,7 @@ export class GameEngine {
       let iterations = 0;
       while (true) {
         iterations += 1;
+        this.gas.spend('loop', 'state-based rules');
         if (iterations > this.#maxDepth) {
           throw new Error(
             `State-based rules exceeded max depth ${this.#maxDepth} — possible infinite SBA loop.`,
@@ -904,7 +1468,7 @@ export class GameEngine {
     const blocked = this.attemptBlocked({
       kind: 'activate',
       target: owner,
-      ctx: { self: owner, source: owner, sourceCharacter: owner, engine: this },
+      ctx: { self: owner, source: owner, sourceCharacter: owner, ability, engine: this },
     });
     if (blocked) return { usable: false, reason: 'restricted', blockedBy: blocked };
     if (ability.available && !ability.available({ self: owner, engine: this })) {
@@ -921,6 +1485,10 @@ export class GameEngine {
    * ability's `cast` runs and its actions flow through the pipeline.
    */
   async useAbility(owner: Character, ability: Ability, targeting: Targeting): Promise<void> {
+    return this.metered(`ability ${ability.name}`, () => this.#useAbility(owner, ability, targeting));
+  }
+
+  async #useAbility(owner: Character, ability: Ability, targeting: Targeting): Promise<void> {
     if (ability.kind !== 'manual') {
       throw new Error(`useAbility: "${ability.name}" is not a manual ability (kind: ${ability.kind})`);
     }
@@ -982,6 +1550,33 @@ export class GameEngine {
    * end the game in the same apply: the outcome checks run once, at the end.
    */
   async apply(actions: Action[], context: { source?: EventSource } = {}): Promise<void> {
+    // The outermost apply is a scope of its own; one reached from inside a move or an
+    // ability shares that scope's budget.
+    return this.metered('apply', () => this.#apply(actions, context));
+  }
+
+  /**
+   * Runs `fn` as one **gas scope** — a unit of work with a budget. Called inside
+   * another scope it shares that budget (a trigger fired by a move is part of the
+   * move); called outside one it starts a fresh budget. When the budget runs out the
+   * work stops with an `OutOfGasError`, announced once as `gas:exhausted`.
+   *
+   * The engine's entry points (`apply`, `useAbility`, `useCardAbility`) already open
+   * one; a host wraps its own units — one player's move, one phase — the same way.
+   */
+  async metered<T>(label: string, fn: () => Promise<T> | T): Promise<T> {
+    try {
+      return await this.gas.scope(label, fn);
+    } catch (error) {
+      if (error instanceof OutOfGasError && !error.announced) {
+        error.announced = true;
+        await this.emit({ type: 'gas:exhausted', label: error.label, used: error.used, limit: error.limit });
+      }
+      throw error;
+    }
+  }
+
+  async #apply(actions: Action[], context: { source?: EventSource } = {}): Promise<void> {
     this.#depth += 1;
     if (this.#depth > this.#maxDepth) {
       this.#depth -= 1;
@@ -1006,6 +1601,7 @@ export class GameEngine {
       };
 
       for (const raw of actions) {
+        this.gas.spend('action', raw.type);
         const source = raw.source ?? context.source;
         let action: Action = raw;
 
@@ -1838,6 +2434,7 @@ export class GameEngine {
         if (pop) await this.#finishFormPop(target, pop, ctx.source);
       }, { subject: (action) => action.target })
       .register('discover', (action) => this.#discover(action))
+      .register('roll', (action) => this.#roll(action))
   }
 
   /**
@@ -2390,10 +2987,10 @@ export class GameEngine {
     // sees reads damage → left play → died.
     this.#announceZoneMoves();
     for (const d of destroyed) {
-      this.#onEvent?.(this.#buildDestroyedEvent(d));
+      this.#notify(this.#buildDestroyedEvent(d));
     }
     if (destroyed.length > 0) {
-      this.#onEvent?.({
+      this.#notify({
         type: 'character:destroyed:batch',
         events: destroyed.map((d) => this.#buildDestroyedEvent(d)),
       });

@@ -10,6 +10,7 @@ import type { Character } from '../character.js';
 import type { GameEngine } from '../engine.js';
 import type { GameEvent } from '../events.js';
 import type { Status } from '../status/index.js';
+import type { Entity } from '../zone.js';
 
 /**
  * Who an ability may target, relative to its owner — derived from the open
@@ -66,9 +67,16 @@ export interface Targeting {
 
 /** What an ability can see while it runs. */
 export interface AbilityContext {
-  /** The character that owns this ability. */
+  /** The character that owns this ability — or, for a card-hosted one, the one using it. */
   readonly self: Character;
   readonly engine: GameEngine;
+  /**
+   * The **card** this ability belongs to, when it is not a character's own: an
+   * ability a zone or an effect gave a card (a Boxed Present's *Open Present*).
+   * "This card" in such an ability is `host`. Absent for an ability a character
+   * carries itself.
+   */
+  readonly host?: Entity;
 }
 
 /** Context for a trigger, with the event narrowed to the subscribed type. */

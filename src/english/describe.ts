@@ -7,6 +7,8 @@
  * generated `description` are built from, and `lower.ts` needs them without
  * depending on the compiler.
  */
+import { REVEAL_CARD_TEXT, REVEAL_TEXT, castCardText, chooseText, moveCardText, moveCardsText, ownerWords, removeCountersText, castCardsText, playText, createText, revealCardsText, splitText, choosePileText, zoneAbilityText, drawText, scryText, moveChosenText, rollPhrase, rollText, storeText, votesPhrase, type RollStat } from './rounds.js';
+import { MATH_ROOTS } from '../ir/math-expression.js';
 import { EVENT_PHRASES } from './vocabulary.js';
 import type {
   CharsPhrase,
@@ -22,8 +24,34 @@ import { mathToLatex, mathToSource, type MathExpression } from '../ir/index.js';
 import type { ManualAbility } from '../engine/index.js';
 
 /** A number, or the plain-text form of a formula (`(this.hp / 2)`). */
+/** `the total` etc. when an amount is exactly a roll's outcome (the path `roll.<stat>`). */
+export function rollStatOfPath(value: MathExpression): RollStat | undefined {
+  if (value.kind !== 'path' || value.parts.length !== 2 || value.parts[0] !== 'roll') return undefined;
+  const stat = value.parts[1];
+  return stat === 'total' || stat === 'highest' || stat === 'lowest' ? stat : undefined;
+}
+
+/** The option when an amount is exactly `votes for <Option>` (the path `votes.<Option>`). */
+export function votesOptionOfPath(value: MathExpression): string | undefined {
+  if (value.kind !== 'path' || value.parts.length !== 2 || value.parts[0] !== 'votes') return undefined;
+  const option = value.parts[1];
+  return typeof option === 'string' ? option : undefined;
+}
+
+/** The name when an amount is exactly a stored variable: a bare word the language does not own. */
+export function variableNameOfPath(value: MathExpression): string | undefined {
+  if (value.kind !== 'path' || value.parts.length !== 1) return undefined;
+  const name = value.parts[0];
+  return typeof name === 'string' && !MATH_ROOTS.includes(name) ? name : undefined;
+}
+
 function amountToString(value: MathExpression): string {
-  return value.kind === 'number' ? String(value.value) : `(${mathToSource(value)})`;
+  if (value.kind === 'number') return String(value.value);
+  const stat = rollStatOfPath(value);
+  if (stat) return rollPhrase(stat);
+  const votes = votesOptionOfPath(value);
+  if (votes !== undefined) return votesPhrase(votes);
+  return variableNameOfPath(value) ?? `(${mathToSource(value)})`;
 }
 
 /** Renders a character phrase the way the player typed it. */
@@ -47,7 +75,7 @@ export function charsToString(chars: CharsPhrase): string {
   }
   if (chars.who) parts.push(chars.who === 'ally' ? 'ally' : 'enemy');
   parts.push(chars.quantifier === 'all' ? 'characters' : 'character');
-  if (chars.owner) parts.push('owned by', chars.owner === 'you' ? 'you' : 'the opponent');
+  if (chars.owner) parts.push('owned by', ownerWords(chars.owner));
   const expression = chars.withClause?.expression;
   if (expression) parts.push('with', conditionToString(expression));
   return parts.join(' ');
@@ -142,6 +170,13 @@ export function availableSummary(clause: IfClause): string {
 
 /** An `If …,` clause as English. */
 export function guardSummary(guard: IfClause): string {
+  if (guard.kind === 'value') {
+    const test =
+      guard.test.kind === 'range'
+        ? guard.test.text
+        : `${guard.test.op === '>' ? 'higher than' : guard.test.op === '<' ? 'lower than' : 'the same as'} ${amountToString(guard.test.other)}`;
+    return `If ${amountToString(guard.value)} is ${test}, `;
+  }
   if (guard.kind === 'count') {
     return `If there are ${guard.count.text} ${charsToString({ ...guard.subject, quantifier: 'all' }).replace(/^all (other )?/, '$1')}, `;
   }
@@ -197,6 +232,54 @@ function bareEffectSummary(sentence: Sentence): string {
       return sentence.chars.quantifier === 'this' && sentence.chars.bare
         ? `Toggle ${sentence.buffName}.`
         : `Toggle ${sentence.buffName} on ${charsToString(sentence.chars)}.`;
+    case 'roll':
+      return [
+        rollText(sentence.count, sentence.sides),
+        ...(sentence.table ?? []).map(
+          (row) => `${row.text}: ${row.sentences.map(effectSummary).join(' ')}`,
+        ),
+      ].join(' ');
+    case 'zoneAbility':
+      return zoneAbilityText(sentence.owners, sentence.zone, sentence.ability, sentence.users, sentence.remove === true);
+    case 'revealCard':
+      return REVEAL_CARD_TEXT;
+    case 'castCard':
+      return castCardText(sentence.otherwise?.zone);
+    case 'moveCard':
+      return moveCardText(sentence.zone, sentence.article, sentence.counters);
+    case 'create':
+      return createText(sentence.players, sentence.creature);
+    case 'play':
+      return playText(sentence.players, sentence.contest);
+    case 'removeCounters':
+      return removeCountersText(sentence.count, sentence.counterKind, sentence.select, sentence.from);
+    case 'castCards':
+      return castCardsText(sentence.select, sentence.from, sentence.free);
+    case 'moveCards':
+      return moveCardsText(sentence.select, sentence.from, sentence.to, sentence.order, sentence.rest);
+    case 'revealCards':
+      return revealCardsText(sentence.select, sentence.from);
+    case 'split':
+      return splitText(sentence.chooser, sentence.from, sentence.into);
+    case 'choosePile':
+      return choosePileText(sentence.options);
+    case 'store':
+      return storeText(amountToString(sentence.value), sentence.name);
+    case 'draw':
+      return drawText(amountToString(sentence.count), sentence.players);
+    case 'scry':
+      return scryText(amountToString(sentence.count), sentence.players, sentence.surveil === true);
+    case 'choose':
+      return chooseText(
+        sentence.players,
+        sentence.pick.kind === 'card' ? { kind: 'card', zone: sentence.pick.zone } : sentence.pick,
+        sentence.secret,
+        sentence.order,
+      );
+    case 'reveal':
+      return REVEAL_TEXT;
+    case 'moveChosen':
+      return moveChosenText(sentence.players, sentence.zone, sentence.committed);
     case 'result':
       return `${sentence.players === 'you' ? 'You' : 'All players'} ${sentence.win ? 'win' : 'lose'} the game.`;
   }

@@ -26,6 +26,7 @@ import {
   maxModifier,
   restriction,
   skill,
+  type GameEngine,
   type Player,
   type SkillDef,
   type TargetPattern,
@@ -53,13 +54,62 @@ export function hasTaunt(character: Character): boolean {
   return character.hasStatus('taunt');
 }
 
-/** A creature that has not settled in yet — it cannot attack this turn. */
+/** The card data a creature carries about its entry (see `CreatureCard.entry`). */
+interface EntryHolder {
+  readonly entry?: CreatureCard['entry'];
+  readonly keywords?: CreatureCard['keywords'];
+}
+
+/**
+ * Whether a creature that has just entered play may use `ability` anyway — the exceptions a
+ * creature card states about itself (`This can attack the turn it enters play.`), or that
+ * another creature of the same controller grants (`Creatures you own can attack …`).
+ * `Charge` is the attack exception, as a keyword.
+ *
+ * With no ability named (a general "can it act at all?"), only `act` exceptions count.
+ */
+export function mayActOnEntry(
+  engine: GameEngine,
+  creature: Character,
+  ability: { readonly id: string; readonly name: string } | undefined,
+): boolean {
+  const isAttack = ability?.id === attack.id;
+  const own = (card: EntryHolder): boolean => {
+    const entry = card.entry;
+    if (entry?.act) return true;
+    if (!ability) return false;
+    if (isAttack && (entry?.attack || card.keywords?.includes('charge'))) return true;
+    if (entry?.abilities?.includes(ability.name)) return true;
+    return !isAttack && entry?.abilities?.includes('*') === true;
+  };
+  if (own(creature as EntryHolder)) return true;
+  const controller = creature.controller;
+  if (!controller) return false;
+  return engine.registeredCharacters.some((other) => {
+    if (other.controller !== controller || !engine.isInPlay(other)) return false;
+    const entry = (other as EntryHolder).entry;
+    return entry?.ownedAct === true || (isAttack && entry?.ownedAttack === true);
+  });
+}
+
+/**
+ * A creature that has just entered play: **it cannot act** — use an ability or attack —
+ * until its controller's next turn. The standing rule (`rules.ts`) puts this on a creature
+ * as it arrives, and a creature card can state exceptions (`mayActOnEntry`).
+ */
 export const summoningSickness = buff({
   id: 'summoning-sickness',
   name: 'Summoning Sickness',
-  description: 'cannot attack until its controller’s next turn',
+  description: 'cannot act until its controller’s next turn',
   weight: 0,
-  abilities: [],
+  abilities: [
+    restriction({
+      name: 'Cannot act',
+      description: 'cannot use abilities or attack the turn it enters play',
+      on: 'activate',
+      when: (ctx) => !mayActOnEntry(ctx.engine, ctx.self, ctx.ability),
+    }),
+  ],
 });
 
 /** One mana crystal: a derived +1 to the hero's mana **max**. */

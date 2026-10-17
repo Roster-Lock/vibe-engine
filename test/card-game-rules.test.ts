@@ -56,19 +56,19 @@ function rule(overrides: Partial<CardRule> & { actions: readonly CardRuleAction[
 
 describe('the standing rules are data', () => {
   it('reads as the game in English, in the order they apply', () => {
-    expect(CARD_RULES.map((r) => r.id)).toEqual(['crystal', 'refill', 'wake', 'draw']);
+    expect(CARD_RULES.map((r) => r.id)).toEqual(['crystal', 'refill', 'wake', 'summoning-sickness', 'draw']);
     expect(CARD_RULES[0]!.name).toContain('mana crystal');
-    expect(CARD_RULES[3]!.name).toBe('At the start of a turn, the turn owner draws a card.');
+    expect(CARD_RULES[4]!.name).toBe('At the start of a turn, the turn owner draws a card.');
     // Every rule names a timing and a scope, so a UI can lay them out.
     for (const entry of CARD_RULES) {
-      expect(entry.at).toBe<RuleTiming>('turn:start');
+      expect(entry.at).toBe<RuleTiming>(entry.id === 'summoning-sickness' ? 'creature:enters' : 'turn:start');
       expect(entry.affects).toBe('turn-owner');
     }
   });
 
   it('is exposed on the game, listable and describable', () => {
     const { game } = match();
-    expect(game.rules.all()).toHaveLength(4);
+    expect(game.rules.all()).toHaveLength(5);
     expect(game.rules.describe()).toEqual(CARD_RULES.map((r) => r.name));
     expect(game.rules.at('turn:end')).toEqual([]);
   });

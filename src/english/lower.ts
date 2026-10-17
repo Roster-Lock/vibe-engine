@@ -30,8 +30,12 @@ import type {
   Sentence,
   TargetBinding,
   TriggerSentence,
+  ZoneSection,
 } from './ast.js';
 import {
+  rollStatOfPath,
+  variableNameOfPath,
+  votesOptionOfPath,
   availableSummary,
   effectSummary,
   modifierSummary,
@@ -53,6 +57,7 @@ import type {
   TargetingIR,
   TriggerIR,
   ValueIR,
+  ZoneSectionIR,
 } from '../ir/index.js';
 import { IR_VERSION } from '../ir/index.js';
 
@@ -64,12 +69,27 @@ import { IR_VERSION } from '../ir/index.js';
  */
 const LIFE_GAUGE = { kind: 'life' } as const;
 
+/**
+ * The one name a choice round has in English: "the card they chose" always
+ * means the most recent `choose`, so the text needs no names and the IR can use
+ * a constant (a later `choose` simply replaces the round).
+ */
+const ROUND = 'choice';
+
 /** The event a `Buff` sentence with no `When …` prefix fires on. */
 const DEFAULT_BUFF_EVENT = 'turn:start';
 
 /** A literal number lowers to a flat `const`; anything richer keeps its formula. */
 function amount(value: MathExpression): ValueIR {
-  return value.kind === 'number' ? { kind: 'const', value: value.value } : { kind: 'expr', expression: value };
+  if (value.kind === 'number') return { kind: 'const', value: value.value };
+  // "the total" / "the highest die" is a roll's outcome, not a formula.
+  const stat = rollStatOfPath(value);
+  if (stat) return { kind: 'rolled', stat };
+  // A bare word the language does not own is a value stored earlier.
+  const votes = votesOptionOfPath(value);
+  if (votes !== undefined) return { kind: 'votes', option: votes };
+  const variable = variableNameOfPath(value);
+  return variable !== undefined ? { kind: 'variable', name: variable } : { kind: 'expr', expression: value };
 }
 
 /* ------------------------------- filters ------------------------------ */
@@ -184,6 +204,7 @@ function lowerModifier(sentence: ModifierSentence, buff: string, index: number):
  * `any` over it *is* the condition on it.
  */
 function lowerGuard(clause: IfClause): PredicateIR {
+  if (clause.kind === 'value') return lowerValueGuard(clause);
   const query = lowerChars(clause.subject);
   if (clause.kind === 'count') {
     // An `if` has no "the batch already fired" floor, so even a bare
@@ -201,10 +222,37 @@ function lowerGuard(clause: IfClause): PredicateIR {
   return { kind: clause.kind, query, test: lowerCondition(clause.condition) };
 }
 
+/** A list of sentences as steps — what an ability's body lowers to. */
+export function lowerSteps(sentences: readonly Sentence[]): StepIR[] {
+  return sentences.map(lowerStep);
+}
+
+/**
+ * `<value> is <test>` as a predicate over the value. Each shape lowers to exactly
+ * the comparison the renderer reads back: a bare `N` is `=`, `N or more` is `>=`,
+ * `N or less` is `<=`, `N to M` is both, and a comparison is `>` / `<` / `=`.
+ */
+function lowerValueGuard(clause: Extract<IfClause, { kind: 'value' }>): PredicateIR {
+  const left = amount(clause.value);
+  const against = (op: '<' | '<=' | '>' | '>=' | '=', n: number): PredicateIR => ({
+    kind: 'compare',
+    op,
+    left,
+    right: { kind: 'const', value: n },
+  });
+  const test = clause.test;
+  if (test.kind === 'compare') return { kind: 'compare', op: test.op, left, right: amount(test.other) };
+  if (test.exact) return against('=', test.min!);
+  const clauses: PredicateIR[] = [];
+  if (test.min !== null) clauses.push(against('>=', test.min));
+  if (test.max !== null) clauses.push(against('<=', test.max));
+  return clauses.length === 1 ? clauses[0]! : { kind: 'and', clauses };
+}
+
 /** One sentence as a step, with its `If …,` clause as the step's gate. */
 function lowerStep(sentence: Sentence): StepIR {
   return {
-    effects: [lowerSentence(sentence)],
+    effects: lowerEffects(sentence),
     ...(sentence.guard ? { when: lowerGuard(sentence.guard) } : {}),
     ...(sentence.optional ? { optional: true } : {}),
     ...(sentence.repeat
@@ -305,6 +353,30 @@ function lowerTrigger(trigger: TriggerSentence, scope: 'self' | 'game', index: n
 
 /* ------------------------------- effects ------------------------------ */
 
+/**
+ * A sentence's effects. Almost always one; a **roll with result lines** is two in
+ * the same step — the roll, then the table that reads it once — so the lines are
+ * governed by the roll's own `If` / `You may`, and nothing runs between them.
+ */
+function lowerEffects(sentence: Sentence): EffectIR[] {
+  const effect = lowerSentence(sentence);
+  if (sentence.kind !== 'roll' || !sentence.table) return [effect];
+  return [
+    effect,
+    {
+      kind: 'table',
+      // The total of the dice just rolled — for a single die, the die.
+      on: { kind: 'rolled', stat: 'total' },
+      rows: sentence.table.map((row) => ({
+        min: row.min,
+        max: row.max,
+        ...(row.otherwise ? { otherwise: true } : {}),
+        steps: row.sentences.map(lowerStep),
+      })),
+    },
+  ];
+}
+
 function lowerSentence(sentence: Sentence): EffectIR {
   switch (sentence.kind) {
     case 'deal':
@@ -331,6 +403,83 @@ function lowerSentence(sentence: Sentence): EffectIR {
       return { kind: 'removeBuff', query: lowerChars(sentence.chars), buff: sentence.buffName };
     case 'toggleBuff':
       return { kind: 'toggleBuff', query: lowerChars(sentence.chars), buff: sentence.buffName };
+    case 'roll':
+      return { kind: 'roll', count: amount({ kind: 'number', value: sentence.count }), sides: amount({ kind: 'number', value: sentence.sides }) };
+    case 'zoneAbility':
+      return {
+        kind: 'zoneAbility',
+        zone: sentence.zone,
+        owners: sentence.owners,
+        // The ability's id: the same slug an ability section's id is made from.
+        ability: slug(sentence.ability) || 'ability',
+        users: sentence.users,
+        ...(sentence.remove ? { remove: true as const } : {}),
+      };
+    case 'revealCard':
+      return { kind: 'revealCard' };
+    case 'castCard':
+      return { kind: 'castCard', ...(sentence.otherwise ? { otherwise: sentence.otherwise.zone } : {}) };
+    case 'moveCard':
+      return {
+        kind: 'moveCard',
+        to: sentence.zone,
+        ...(sentence.article ? { article: sentence.article } : {}),
+        ...(sentence.counters ? { counters: sentence.counters } : {}),
+      };
+    case 'create':
+      return { kind: 'create', players: sentence.players, creature: sentence.creature };
+    case 'play':
+      return { kind: 'play', players: sentence.players, contest: sentence.contest };
+    case 'removeCounters':
+      return {
+        kind: 'removeCounters',
+        count: sentence.count,
+        ...(sentence.counterKind ? { counterKind: sentence.counterKind } : {}),
+        select: sentence.select,
+        from: sentence.from,
+      };
+    case 'castCards':
+      return { kind: 'castCards', select: sentence.select, from: sentence.from, ...(sentence.free ? { free: true as const } : {}) };
+    case 'moveCards':
+      return {
+        kind: 'moveCards',
+        select: sentence.select,
+        from: sentence.from,
+        to: sentence.to,
+        ...(sentence.order ? { order: sentence.order } : {}),
+        ...(sentence.rest ? { rest: sentence.rest } : {}),
+      };
+    case 'revealCards':
+      return { kind: 'revealCards', select: sentence.select, from: sentence.from };
+    case 'split':
+      return { kind: 'split', chooser: sentence.chooser, from: sentence.from, into: sentence.into };
+    case 'choosePile':
+      return { kind: 'choosePile', options: sentence.options };
+    case 'store':
+      return { kind: 'store', name: sentence.name, value: amount(sentence.value) };
+    case 'draw':
+      return { kind: 'draw', count: amount(sentence.count), players: sentence.players };
+    case 'scry':
+      return { kind: 'scry', count: amount(sentence.count), players: sentence.players, ...(sentence.surveil ? { surveil: true as const } : {}) };
+    case 'choose':
+      return {
+        kind: 'choose',
+        round: ROUND,
+        players: sentence.players,
+        secret: sentence.secret,
+        pick:
+          sentence.pick.kind === 'card'
+            ? { kind: 'card', from: sentence.pick.zone }
+            : sentence.pick.kind === 'label'
+              ? { kind: 'label', options: sentence.pick.options }
+              : { kind: 'number', min: amount({ kind: 'number', value: sentence.pick.min }), max: amount({ kind: 'number', value: sentence.pick.max }) },
+        // An open vote says who goes first; every other choice goes round from the caster.
+        ...(sentence.order ? { order: sentence.order } : {}),
+      };
+    case 'reveal':
+      return { kind: 'reveal', round: ROUND };
+    case 'moveChosen':
+      return { kind: 'moveChosen', round: ROUND, to: sentence.zone };
     case 'result':
       return {
         kind: 'result',
@@ -402,7 +551,7 @@ function lowerAbility(section: AbilitySection): AbilityIR {
 function lowerBuff(section: BuffSection): BuffIR {
   const byEvent = new Map<string, Sentence[]>();
   for (const sentence of section.sentences) {
-    const event = sentence.event ?? DEFAULT_BUFF_EVENT;
+    const event = (sentence.event ?? DEFAULT_BUFF_EVENT).replace(/:yours$/, '');
     const sentences = byEvent.get(event) ?? [];
     sentences.push(sentence);
     byEvent.set(event, sentences);
@@ -417,7 +566,7 @@ function lowerBuff(section: BuffSection): BuffIR {
     // own; without guards the group keeps its single apply.
     steps: sentences.some((sentence) => sentence.guard || sentence.optional)
       ? sentences.map(lowerStep)
-      : [{ effects: sentences.map(lowerSentence) }],
+      : [{ effects: sentences.flatMap(lowerEffects) }],
   }));
   // A buff's `when … then …` sentences become triggers it grants while
   // attached — scope `self`, since the buff's wearer carries them.
@@ -443,6 +592,32 @@ function lowerBuff(section: BuffSection): BuffIR {
   };
 }
 
+/* -------------------------------- zones -------------------------------- */
+
+/**
+ * A `Zone` section's statements, each filled in with the section's own zone — the
+ * "this zone" of `Cards in this zone have …` is the zone the heading names.
+ */
+function lowerZone(section: ZoneSection): ZoneSectionIR {
+  const plain = section.sentences.filter((sentence) => sentence.event === undefined);
+  const rules = section.sentences.filter((sentence) => sentence.event !== undefined);
+  return {
+    zone: section.zone,
+    steps: plain.map((sentence) =>
+      lowerStep(sentence.kind === 'zoneAbility' ? { ...sentence, zone: section.zone } : sentence),
+    ),
+    ...(rules.length > 0
+      ? {
+          triggers: rules.map((sentence) => ({
+            event: sentence.event!.replace(/:yours$/, ''),
+            yours: sentence.event!.endsWith(':yours'),
+            steps: [lowerStep({ ...sentence, event: undefined } as Sentence)],
+          })),
+        }
+      : {}),
+  };
+}
+
 /* ------------------------------ documents ----------------------------- */
 
 /**
@@ -456,6 +631,7 @@ export function lowerDocument(doc: Doc, buffSections: readonly BuffSection[] = d
     imports: doc.imports.map((section) => ({ name: section.name, path: section.path })),
     abilities: doc.abilities.map(lowerAbility),
     buffs: buffSections.map(lowerBuff),
+    ...(doc.zones.length > 0 ? { zones: doc.zones.map(lowerZone) } : {}),
     // Written outside any Buff: they belong to no status, so the host
     // decides which character carries them (`CompileResult.triggers`).
     triggers: doc.triggers.map((trigger, index) => lowerTrigger(trigger, 'game', index)),

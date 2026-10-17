@@ -6,7 +6,7 @@
  * reference). Everything carries a source span so the editor can point at
  * the exact text for diagnostics, completion, and future hover help.
  */
-import type { MathExpression } from '../ir/index.js';
+import type { CardOrderIR, CardSelectorIR, CardSourceIR, ContestIR, ContestPlayersIR, MathExpression, PlayerListIR, RestIR, ZoneRefIR } from '../ir/index.js';
 
 export interface Span {
   /** Absolute character offset of the first character (inclusive). */
@@ -31,6 +31,11 @@ export interface Doc {
   readonly abilities: AbilitySection[];
   readonly buffs: BuffSection[];
   readonly imports: ImportSection[];
+  /**
+   * `Zone boxed` sections: statements about one of the game's zones, the way an
+   * `Ability` section is about an ability. They are applied by the host at setup.
+   */
+  readonly zones: ZoneSection[];
   /**
    * `when … then …` sentences written outside any `Buff` — they belong to
    * no status, so the host decides which character carries them (see
@@ -118,6 +123,28 @@ export interface ZonePhrase {
   readonly opposite?: string;
   /** Span of the whole phrase, for hover help. */
   readonly span: Span;
+}
+
+/**
+ * `Zone boxed` followed by statements about that zone, in which **"this zone"** is
+ * the zone the heading names:
+ *
+ * ```
+ * Zone boxed
+ * Cards in this zone have Open Present for each opponent.
+ * ```
+ *
+ * For a per-player zone it covers every player's instance, and "you" / "each
+ * opponent" are relative to *that instance's owner*; a shared zone has no owner, so
+ * only "each player" makes sense there.
+ */
+export interface ZoneSection {
+  readonly kind: 'zone';
+  readonly span: Span;
+  /** The zone's canonical name (resolved against the host's zones). */
+  readonly zone: string;
+  readonly nameSpan: Span;
+  sentences: Sentence[];
 }
 
 export interface ImportSection {
@@ -271,6 +298,38 @@ export type IfClause =
       readonly span: Span;
       readonly subject: CharsPhrase;
       readonly condition: BooleanCondition;
+    }
+  /**
+   * `<value> is <test>` — a condition on a number: `that total is 10 or more`,
+   * `AttackerRoll is higher than DefenderRoll`. The value is any amount (a roll,
+   * a stored name, a formula).
+   */
+  | {
+      readonly kind: 'value';
+      readonly span: Span;
+      readonly value: MathExpression;
+      readonly test: ValueTest;
+    };
+
+/**
+ * What a number is tested against. A **range** is `N`, `N to M`, `N or more` or
+ * `N or less`; a **comparison** is against another amount: `higher than`,
+ * `lower than`, `the same as`.
+ */
+export type ValueTest =
+  | {
+      readonly kind: 'range';
+      /** A bare `N` — equal to, rather than the one-point range `N to N`. */
+      readonly exact: boolean;
+      readonly min: number | null;
+      readonly max: number | null;
+      /** The test as written (`10 or more`), for diagnostics. */
+      readonly text: string;
+    }
+  | {
+      readonly kind: 'compare';
+      readonly op: '>' | '<' | '=';
+      readonly other: MathExpression;
     };
 
 /**
@@ -302,6 +361,25 @@ export type Sentence =
   | AddBuffSentence
   | RemoveBuffSentence
   | ToggleBuffSentence
+  | RollSentence
+  | ZoneAbilitySentence
+  | RevealCardSentence
+  | CastCardSentence
+  | MoveCardSentence
+  | MoveCardsSentence
+  | RevealCardsSentence
+  | SplitSentence
+  | RemoveCountersSentence
+  | PlaySentence
+  | CreateSentence
+  | CastCardsSentence
+  | ChoosePileSentence
+  | StoreSentence
+  | DrawSentence
+  | ScrySentence
+  | ChooseSentence
+  | RevealSentence
+  | MoveChosenSentence
   | ResultSentence;
 
 /** `Deal 5 damage to all enemy characters.` */
@@ -407,6 +485,373 @@ export interface ToggleBuffSentence {
 }
 
 /**
+ * `Cards in your boxed zone have Open Present for each opponent.` — gives every
+ * card in a zone an ability it never printed, for the players named. The ability
+ * is one of the document's own, named as written; whose zone, and who may use it,
+ * are spelled out so nothing is left to a reader to guess. Without `for …` anyone
+ * may.
+ */
+export interface ZoneAbilitySentence {
+  readonly kind: 'zoneAbility';
+  readonly span: Span;
+  readonly zone: string;
+  readonly zoneSpan: Span;
+  /**
+   * Whose instance of the zone: `your`, `each player's`, `each opponent's`, `the` (a
+   * shared zone), or `this` — the zone a `Zone` section is about (then `zone` is
+   * empty until the section fills it in).
+   */
+  readonly owners: 'you' | 'each' | 'opponents' | 'shared' | 'this';
+  /** The ability's name as written (resolved against the document's abilities). */
+  readonly ability: string;
+  readonly abilitySpan: Span;
+  readonly users: 'you' | 'each' | 'opponents';
+  /** `no longer have` — takes the ability away from the zone's cards instead. */
+  readonly remove?: true;
+  /** An `If …,` clause gating this effect. */
+  readonly guard?: IfClause;
+  /** `You may …` — the controller is asked before this effect runs. */
+  readonly optional?: boolean;
+  /** `Repeat …:` — this effect runs more than once. */
+  readonly repeat?: RepeatClause;
+  readonly event?: string;
+}
+
+/**
+ * `Reveal this card.` — show the card an ability belongs to. "This card" is the
+ * card a zone or an effect gave the ability to (a Boxed Present's *Open Present*),
+ * not a character.
+ */
+export interface RevealCardSentence {
+  readonly kind: 'revealCard';
+  readonly span: Span;
+  /** An `If …,` clause gating this effect. */
+  readonly guard?: IfClause;
+  /** `You may …` — the controller is asked before this effect runs. */
+  readonly optional?: boolean;
+  /** `Repeat …:` — this effect runs more than once. */
+  readonly repeat?: RepeatClause;
+  readonly event?: string;
+}
+
+/**
+ * `Cast this card if you can.` / `Cast this card if you can, otherwise move it to
+ * its owner's garbage.` — whether it can be cast is the game's to say, and casting
+ * reveals it. The fallback is a zone of the card's owner.
+ */
+export interface CastCardSentence {
+  readonly kind: 'castCard';
+  readonly span: Span;
+  readonly otherwise?: { readonly zone: string; readonly zoneSpan: Span };
+  /** An `If …,` clause gating this effect. */
+  readonly guard?: IfClause;
+  /** `You may …` — the controller is asked before this effect runs. */
+  readonly optional?: boolean;
+  /** `Repeat …:` — this effect runs more than once. */
+  readonly repeat?: RepeatClause;
+  readonly event?: string;
+}
+
+/** `The winners create a Giant Golem.` */
+export interface CreateSentence {
+  readonly kind: 'create';
+  readonly span: Span;
+  readonly players: PlayerListIR;
+  readonly creature: string;
+  readonly guard?: IfClause;
+  readonly optional?: boolean;
+  readonly repeat?: RepeatClause;
+  readonly event?: string;
+}
+
+/** `Each player plays Rock Paper Scissors.` */
+export interface PlaySentence {
+  readonly kind: 'play';
+  readonly span: Span;
+  readonly players: ContestPlayersIR;
+  readonly contest: ContestIR;
+  readonly guard?: IfClause;
+  readonly optional?: boolean;
+  readonly repeat?: RepeatClause;
+  readonly event?: string;
+}
+
+/** `Remove a counter from all cards in this zone.` */
+export interface RemoveCountersSentence {
+  readonly kind: 'removeCounters';
+  readonly span: Span;
+  readonly count: number;
+  readonly counterKind?: string;
+  readonly select: CardSelectorIR;
+  readonly from: ZoneRefIR;
+  readonly guard?: IfClause;
+  readonly optional?: boolean;
+  readonly repeat?: RepeatClause;
+  readonly event?: string;
+}
+
+/** `Cast all cards with no counters from this zone without paying their cost.` */
+export interface CastCardsSentence {
+  readonly kind: 'castCards';
+  readonly span: Span;
+  readonly select: CardSelectorIR;
+  readonly from: ZoneRefIR;
+  readonly free?: true;
+  readonly guard?: IfClause;
+  readonly optional?: boolean;
+  readonly repeat?: RepeatClause;
+  readonly event?: string;
+}
+
+/** `Target opponent separates Pool into Fact and Fiction.` */
+export interface SplitSentence {
+  readonly kind: 'split';
+  readonly span: Span;
+  readonly chooser: 'you' | 'opponent';
+  readonly from: ZoneRefIR;
+  readonly into: readonly [string, string];
+  readonly guard?: IfClause;
+  readonly optional?: boolean;
+  readonly repeat?: RepeatClause;
+  readonly event?: string;
+}
+
+/** `You choose Fact or Fiction.` */
+export interface ChoosePileSentence {
+  readonly kind: 'choosePile';
+  readonly span: Span;
+  readonly options: readonly [string, string];
+  readonly guard?: IfClause;
+  readonly optional?: boolean;
+  readonly repeat?: RepeatClause;
+  readonly event?: string;
+}
+
+/** `Reveal all cards castable by target opponent.` */
+export interface RevealCardsSentence {
+  readonly kind: 'revealCards';
+  readonly span: Span;
+  readonly select: CardSelectorIR;
+  readonly selectSpan: Span;
+  readonly from: CardSourceIR;
+  readonly fromSpan: Span;
+  readonly guard?: IfClause;
+  readonly optional?: boolean;
+  readonly repeat?: RepeatClause;
+  readonly event?: string;
+}
+
+/** `Move the top 3 cards from your library to your hand.` */
+export interface MoveCardsSentence {
+  readonly kind: 'moveCards';
+  readonly span: Span;
+  readonly select: CardSelectorIR;
+  readonly selectSpan: Span;
+  readonly from: CardSourceIR;
+  readonly fromSpan: Span;
+  readonly to: ZoneRefIR;
+  readonly toSpan: Span;
+  readonly order?: CardOrderIR;
+  readonly rest?: RestIR;
+  /** An `If …,` clause gating this effect. */
+  readonly guard?: IfClause;
+  /** `You may …` — the controller is asked before this effect runs. */
+  readonly optional?: boolean;
+  /** `Repeat …:` — this effect runs more than once. */
+  readonly repeat?: RepeatClause;
+  readonly event?: string;
+}
+
+/** `Move this card to its owner's garbage.` */
+export interface MoveCardSentence {
+  readonly kind: 'moveCard';
+  readonly span: Span;
+  readonly zone: string;
+  readonly zoneSpan: Span;
+  readonly article?: 'the';
+  readonly counters?: { readonly count: number; readonly kind?: string };
+  /** An `If …,` clause gating this effect. */
+  readonly guard?: IfClause;
+  /** `You may …` — the controller is asked before this effect runs. */
+  readonly optional?: boolean;
+  /** `Repeat …:` — this effect runs more than once. */
+  readonly repeat?: RepeatClause;
+  readonly event?: string;
+}
+
+/**
+ * `Roll a d20.` / `Roll 2d6.` — rolls dice; later sentences read the outcome as
+ * `the total`, `the highest die` or `the lowest die`
+ * (docs/design/20-secret-choices-and-dice.md).
+ */
+export interface RollSentence {
+  readonly kind: 'roll';
+  readonly span: Span;
+  readonly count: number;
+  readonly sides: number;
+  /**
+   * The result lines under the roll, one per line, in the Deck of Many Things
+   * shape. Each line covers a result (or a range) and holds its own sentences:
+   *
+   * ```
+   * Roll a d20.
+   *   1: Destroy this character.
+   *   2 to 5: Deal 5 damage to this character.
+   *   20: Draw(you, 2).
+   * ```
+   */
+  readonly table?: readonly TableRow[];
+  /** An `If …,` clause gating this effect. */
+  readonly guard?: IfClause;
+  /** `You may …` — the controller is asked before this effect runs. */
+  readonly optional?: boolean;
+  /** `Repeat …:` — this effect runs more than once. */
+  readonly repeat?: RepeatClause;
+  readonly event?: string;
+}
+
+/**
+ * One result line of a roll table: `2 to 5: Deal 5 damage to this character.`
+ * The range is inclusive; `max: null` is open ("15 or more"), and `otherwise`
+ * covers whatever no other line does. A line may hold several sentences.
+ */
+export interface TableRow {
+  readonly span: Span;
+  /** The header as written (`2 to 5`, `15 or more`, `Otherwise`), for diagnostics. */
+  readonly text: string;
+  readonly min: number;
+  readonly max: number | null;
+  readonly otherwise: boolean;
+  readonly sentences: readonly Sentence[];
+}
+
+/**
+ * `Store that value as AttackerRoll.` — keeps a value under a name for the rest
+ * of the ability, so it survives a later roll. Read it back by writing the name
+ * where an amount goes.
+ */
+export interface StoreSentence {
+  readonly kind: 'store';
+  readonly span: Span;
+  /** The value kept: `that total`, a number, or a formula. */
+  readonly value: MathExpression;
+  readonly name: string;
+  readonly nameSpan: Span;
+  /** An `If …,` clause gating this effect. */
+  readonly guard?: IfClause;
+  /** `You may …` — the controller is asked before this effect runs. */
+  readonly optional?: boolean;
+  /** `Repeat …:` — this effect runs more than once. */
+  readonly repeat?: RepeatClause;
+  readonly event?: string;
+}
+
+/**
+ * `Scry(you, 3).` — `scry(player, count)`: look at that many cards from the top of the
+ * player's library; they put any number on the bottom and the rest back on top, in the
+ * order they choose.
+ */
+export interface ScrySentence {
+  readonly kind: 'scry';
+  /** `Surveil(…)`: the cards not kept on top go to the garbage, not the bottom. */
+  readonly surveil?: true;
+  readonly span: Span;
+  readonly count: MathExpression;
+  readonly players: PlayerListIR;
+  readonly guard?: IfClause;
+  readonly optional?: boolean;
+  readonly repeat?: RepeatClause;
+  readonly event?: string;
+}
+
+/**
+ * `Draw(you, 2).` — `draw(player, count)`: move that many cards from the top of
+ * the player's library to their hand.
+ */
+export interface DrawSentence {
+  readonly kind: 'draw';
+  readonly span: Span;
+  readonly count: MathExpression;
+  readonly players: PlayerListIR;
+  /** An `If …,` clause gating this effect. */
+  readonly guard?: IfClause;
+  /** `You may …` — the controller is asked before this effect runs. */
+  readonly optional?: boolean;
+  /** `Repeat …:` — this effect runs more than once. */
+  readonly repeat?: RepeatClause;
+  readonly event?: string;
+}
+
+/**
+ * `Each player commits a card from their hand face down.` /
+ * `Each player chooses a number from 1 to 6.`
+ *
+ * Opens a choice round (docs/design/20-secret-choices-and-dice.md). **Commit**
+ * is sealed: every player answers without seeing the others, face down. **Choose**
+ * is open: the players answer in turn order.
+ */
+export interface ChooseSentence {
+  readonly kind: 'choose';
+  readonly span: Span;
+  /** `'each'` — every player; `'opponents'` — `Each opponent`; `'you'`. */
+  readonly players: 'you' | 'each' | 'opponents';
+  readonly playersSpan: Span;
+  readonly pick:
+    | { readonly kind: 'card'; readonly zone: string; readonly zoneSpan: Span }
+    | { readonly kind: 'number'; readonly min: number; readonly max: number }
+    /** `a vote for Attack or Retreat` — a list of names (labelled options). */
+    | { readonly kind: 'label'; readonly options: readonly string[] };
+  /**
+   * For an open vote, who goes first: `Starting with you` (caster-first),
+   * `Ending with you` (caster-last), `Starting with a random player` (random),
+   * `In reverse order` (reverse). Absent on every other choice.
+   */
+  readonly order?: 'caster-first' | 'caster-last' | 'random' | 'reverse';
+  /** The verb was `commit` (sealed, face down) rather than `choose` (open). */
+  readonly secret: boolean;
+  /** An `If …,` clause gating this effect. */
+  readonly guard?: IfClause;
+  /** `You may …` — the controller is asked before this effect runs. */
+  readonly optional?: boolean;
+  /** `Repeat …:` — this effect runs more than once. */
+  readonly repeat?: RepeatClause;
+  readonly event?: string;
+}
+
+/** `When they are ready, reveal.` — opens a sealed round. */
+export interface RevealSentence {
+  readonly kind: 'reveal';
+  readonly span: Span;
+  /** An `If …,` clause gating this effect. */
+  readonly guard?: IfClause;
+  /** `You may …` — the controller is asked before this effect runs. */
+  readonly optional?: boolean;
+  /** `Repeat …:` — this effect runs more than once. */
+  readonly repeat?: RepeatClause;
+  readonly event?: string;
+}
+
+/** `Each player puts the card they chose into their garbage.` */
+export interface MoveChosenSentence {
+  readonly kind: 'moveChosen';
+  readonly span: Span;
+  readonly players: 'you' | 'each' | 'opponents';
+  readonly playersSpan: Span;
+  /** `committed` was written (rather than `chose`) — echoed back in summaries. */
+  readonly committed: boolean;
+  /** The zone each chooser's card goes to (canonical spelling). */
+  readonly zone: string;
+  readonly zoneSpan: Span;
+  /** An `If …,` clause gating this effect. */
+  readonly guard?: IfClause;
+  /** `You may …` — the controller is asked before this effect runs. */
+  readonly optional?: boolean;
+  /** `Repeat …:` — this effect runs more than once. */
+  readonly repeat?: RepeatClause;
+  readonly event?: string;
+}
+
+/**
  * `You lose the game.` / `All players win the game.` — the subject-first
  * word order, the one place a noun starts a sentence (see the doc).
  */
@@ -448,7 +893,7 @@ export type Quantifier =
 /** Relative-to-user adjective on a group. */
 export type Who = 'ally' | 'enemy';
 /** The owner filter of a group: the user's player, or their opponent's. */
-export type Owner = 'you' | 'opponent';
+export type Owner = 'you' | 'opponent' | 'winners' | 'losers';
 
 /* --------------------------- the "with" clause ------------------------- */
 
@@ -538,7 +983,36 @@ export function sentenceStartSpan(sentence: Sentence): Span {
     case 'addBuff':
     case 'removeBuff':
     case 'toggleBuff':
+    case 'roll':
+    case 'store':
+    case 'draw':
+    case 'scry':
+    case 'revealCard':
+    case 'castCard':
+    case 'moveCard':
+    case 'moveCards':
+    case 'revealCards':
+    case 'split':
+    case 'removeCounters':
+    case 'play':
+    case 'create':
+    case 'castCards':
+    case 'choosePile':
+    case 'zoneAbility':
+    case 'choose':
+    case 'reveal':
+    case 'moveChosen':
     case 'result':
       return { start: sentence.span.start, end: sentence.span.start + 1 };
   }
+}
+
+/**
+ * A sentence and every sentence nested inside it (a roll table's result lines),
+ * in reading order. Walkers that must see *every* sentence — buff references,
+ * stored names — use this instead of assuming a sentence list is flat.
+ */
+export function withNested(sentence: Sentence): Sentence[] {
+  if (sentence.kind !== 'roll' || !sentence.table) return [sentence];
+  return [sentence, ...sentence.table.flatMap((row) => row.sentences.flatMap(withNested))];
 }

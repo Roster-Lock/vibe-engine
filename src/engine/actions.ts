@@ -336,6 +336,42 @@ export interface DiscoverAction {
   readonly bypasses?: readonly string[];
 }
 
+/**
+ * **Roll dice** — `count` dice with `sides` faces each. An action, not a bare
+ * function call, so it flows through the pipeline: a transformer can change the
+ * dice ("roll an extra die"), add to the outcome (`adjust`), or reroll; a
+ * `roll:made` event announces it ("whenever an opponent rolls"); and the
+ * `source` records who rolled, since that attribution is what those triggers read.
+ *
+ * Where the numbers come from is the engine's `Roller`, not the action's
+ * business — see `src/engine/dice.ts`.
+ */
+export interface RollAction {
+  readonly type: 'roll';
+  readonly count: number;
+  readonly sides: number;
+  /** Why, for a table roller to prompt with and content to read. */
+  readonly reason?: string;
+  /**
+   * Post-processing of the results, applied in order after the roller answers:
+   * "add 1 to each", "reroll ones". A transformer adds to this list rather than
+   * replacing it, so two of them compose. `reroll` rolls the same dice again
+   * through the roller.
+   */
+  readonly adjust?: readonly RollAdjust[];
+  /** Called with the final results — how the caller of `engine.roll` gets them back. */
+  readonly onRolled?: (results: readonly number[]) => void;
+  readonly source?: EventSource;
+  readonly direction?: ActionDirection;
+  readonly bypasses?: readonly string[];
+}
+
+/** One adjustment to a roll's results. */
+export type RollAdjust = (
+  results: readonly number[],
+  reroll: () => Promise<readonly number[]>,
+) => readonly number[] | Promise<readonly number[]>;
+
 /** Context passed to a transformer while an action flows through a character. */
 export interface ActionContext {
   readonly source: EventSource | undefined;
@@ -582,6 +618,30 @@ export function heal(target: Gauge, amount: number, source?: EventSource): Gauge
     update: (cur) => cur + amount,
     intent: 'heal',
     ...(source ? { source } : {}),
+  };
+}
+
+/** Rolls dice. See `RollAction` for why this is an action. */
+export function roll(
+  count: number,
+  sides: number,
+  options: {
+    reason?: string;
+    source?: EventSource;
+    adjust?: readonly RollAdjust[];
+    onRolled?: (results: readonly number[]) => void;
+  } = {},
+): RollAction {
+  if (!Number.isInteger(count) || count < 1) throw new Error(`roll: count must be a positive integer, got ${count}`);
+  if (!Number.isInteger(sides) || sides < 2) throw new Error(`roll: sides must be an integer of at least 2, got ${sides}`);
+  return {
+    type: 'roll',
+    count,
+    sides,
+    ...(options.reason ? { reason: options.reason } : {}),
+    ...(options.adjust ? { adjust: options.adjust } : {}),
+    ...(options.onRolled ? { onRolled: options.onRolled } : {}),
+    ...(options.source ? { source: options.source } : {}),
   };
 }
 

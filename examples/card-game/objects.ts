@@ -45,9 +45,16 @@ import { TAUNT_MARKER, attack, tauntRule } from './combat.js';
 export class PermanentCard extends Character implements CreatureCard {
   readonly kind = 'creature' as const;
   readonly id: string;
+  /** The id the card is printed with; `id` is unique per physical card (`<printed>#2` for a second copy). */
+  readonly printedId: string;
+  /** Whose card this is, whoever holds it now (see `Entity.owner`). */
+  readonly owner: Player;
   readonly cost: number;
   readonly text?: string;
   readonly keywords?: readonly Keyword[];
+  /** Exceptions to "a creature cannot act the turn it enters play". */
+  readonly entry?: CreatureCard['entry'];
+  readonly handAbilities?: CreatureCard['handAbilities'];
   /** The abilities factory, kept for inspection; the skills are already built. */
   readonly grants?: (side: CardSide) => Ability[];
   readonly onPlay?: CreatureCard['onPlay'];
@@ -76,11 +83,15 @@ export class PermanentCard extends Character implements CreatureCard {
     // later becomes: a creature marked `instant` is a **flash** creature.
     if (isInstant(card)) instant(this);
     this.id = card.id;
+    this.printedId = card.id;
+    this.owner = controller;
     this.cost = card.cost;
     this.controller = controller;
     this.team = controller.team;
     if (card.text !== undefined) this.text = card.text;
     if (card.keywords) this.keywords = card.keywords;
+    if (card.entry) this.entry = card.entry;
+    if (card.handAbilities) this.handAbilities = card.handAbilities;
     if (card.grants) this.grants = card.grants;
     if (card.onPlay) this.onPlay = card.onPlay;
     if (card.onPlayTargeting) this.onPlayTargeting = card.onPlayTargeting;
@@ -107,24 +118,36 @@ export class SpellCardObject implements SpellCard {
   readonly kind = 'spell' as const;
   readonly name: string;
   readonly id: string;
+  readonly printedId: string;
+  readonly owner: Player;
   readonly cost: number;
   readonly text?: string;
   readonly targeting?: TargetPattern;
   readonly effect: SpellCard['effect'];
+  readonly handAbilities?: SpellCard['handAbilities'];
 
-  constructor(card: SpellCard) {
+  constructor(card: SpellCard, owner: Player) {
+    this.owner = owner;
     if (isInstant(card)) instant(this);
     this.name = card.name;
     // A card's speed is a property of the card, not of the stack object it
     // later becomes: a creature marked `instant` is a **flash** creature.
     if (isInstant(card)) instant(this);
     this.id = card.id;
+    this.printedId = card.id;
     this.cost = card.cost;
     this.effect = card.effect;
     if (card.text !== undefined) this.text = card.text;
     if (card.targeting) this.targeting = card.targeting;
+    if (card.handAbilities) this.handAbilities = card.handAbilities;
   }
 }
+
+/**
+ * Abilities a card gives itself that may be used only from the hand (`Suspend: …`). A card
+ * is granted them for the whole game; this says where they may be used.
+ */
+export const HAND_ABILITIES = new WeakSet<object>();
 
 /** Anything that can sit in a card game's zone. */
 export type CardObject = PermanentCard | SpellCardObject;
@@ -141,5 +164,5 @@ export function isPermanent(card: CardObject): card is PermanentCard {
 export function instantiate(card: Card, controller: Player, side: CardSide): CardObject {
   return card.kind === 'creature'
     ? new PermanentCard(card, controller, side)
-    : new SpellCardObject(card);
+    : new SpellCardObject(card, controller);
 }

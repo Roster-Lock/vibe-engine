@@ -64,10 +64,11 @@
  * a line map that translates the compiler's spans back into the player's
  * document so squiggles land on the words that caused them.
  */
-import type { AnyTriggeredAbility, BuffDef, ManualAbility, TargetPattern } from '../engine/index.js';
-import type { DocumentIR } from '../ir/index.js';
+import type { AnyTriggeredAbility, BuffDef, ManualAbility, TargetPattern, ZoneDef } from '../engine/index.js';
+import type { ContestIR, DocumentIR, ZoneBinding } from '../ir/index.js';
 import type { CharsPhrase, Diagnostic, Doc, Sentence, Span } from './ast.js';
 import { compileDocument, type CompileOptions } from './compile.js';
+import { parseContest } from './contest.js';
 import { completeAt, wordDoc, type Suggestion } from './complete.js';
 import { BuffDictionary, emptyDictionary, slug, type DictionaryEntry } from './dictionary.js';
 import {
@@ -78,11 +79,53 @@ import {
   type KeywordDef,
   type KeywordInvocation,
 } from './glossary.js';
-import { emptyZoneDictionary, type ZoneDictionary } from './zone-dictionary.js';
+import { emptyZoneDictionary, ZoneDictionary } from './zone-dictionary.js';
 
 /* ------------------------------- the shapes ------------------------------ */
 
 export type CardKind = 'creature' | 'spell';
+
+/**
+ * Exceptions to the standing "a creature cannot act the turn it enters play" rule, as a
+ * creature card states them:
+ *
+ * - `This can act the turn it enters play.` — `act`
+ * - `This can attack the turn it enters play.` — `attack`
+ * - `This can use Open Wide the turn it enters play.` — `abilities: ['Open Wide']`
+ * - `This can use any ability the turn it enters play.` — `abilities: ['*']`
+ *   (every ability other than attacking, which has its own line)
+ * - `Creatures you own can act / attack the turn they enter play.` — `ownedAct` / `ownedAttack`,
+ *   which hold for as long as the creature is in play
+ */
+export interface EntryRules {
+  readonly act?: true;
+  readonly attack?: true;
+  readonly abilities?: readonly string[];
+  readonly ownedAct?: true;
+  readonly ownedAttack?: true;
+}
+
+/** Reads one `…the turn it enters play.` exception line, or `undefined` if it is not one. */
+export function parseEntryRule(content: string): EntryRules | undefined {
+  const text = content.trim().replace(/\.$/, '');
+  let match = /^this can (act|attack) the turn it enters play$/i.exec(text);
+  if (match) return match[1]!.toLowerCase() === 'act' ? { act: true } : { attack: true };
+  // `This can use any ability …` — and the shorter `This can any ability …`.
+  if (/^this can (?:use )?any ability the turn it enters play$/i.test(text)) return { abilities: ['*'] };
+  match = /^this can use (.+?) the turn it enters play$/i.exec(text);
+  if (match) return { abilities: [match[1]!] };
+  match = /^creatures you own can (act|attack) the turn (?:they|it) enters? play$/i.exec(text);
+  if (match) return match[1]!.toLowerCase() === 'act' ? { ownedAct: true } : { ownedAttack: true };
+  return undefined;
+}
+
+function mergeEntry(a: EntryRules, b: EntryRules): EntryRules {
+  return {
+    ...a,
+    ...b,
+    ...(a.abilities || b.abilities ? { abilities: [...(a.abilities ?? []), ...(b.abilities ?? [])] } : {}),
+  };
+}
 
 /**
  * The keywords the **card game** acts on, as the compiled card reports them.
@@ -104,6 +147,12 @@ export interface CompiledCard {
   readonly power?: number;
   readonly health?: number;
   readonly keywords: readonly CardKeyword[];
+  /** A creature definition that effects make (`Creature Giant Golem 6/6`), not a card for a deck. */
+  readonly token?: true;
+  /** What it may do the turn it enters play, despite the standing rule. */
+  readonly entry?: EntryRules;
+  /** Abilities the card gives itself (`Suspend: Move this card to the Suspend zone …`), usable from the hand. */
+  readonly handAbilities?: readonly { readonly name: string; readonly ability: ManualAbility }[];
   /**
    * The card's **play-time** effect: a spell's body, or a creature's
    * `When this enters play …` effect when that effect picks a target (the
@@ -144,6 +193,10 @@ export interface CardCompileResult {
   readonly buffs: readonly { readonly name: string; readonly span: Span }[];
   /** The bound `BuffDef`s the document's `Buff` sections compiled to. */
   readonly buffDefs: readonly BuffDef[];
+  /** The zones the document declares (`Zone Suspend (per-player, public)`). */
+  readonly zoneDefs: readonly ZoneDef[];
+  /** The rules each `Zone` section keeps, to apply once a game's zones and players exist. */
+  readonly zones: readonly ZoneBinding[];
 }
 
 export interface CardCompileOptions extends CompileOptions {
@@ -210,6 +263,27 @@ function isIgnorable(line: SourceLine): boolean {
 
 interface CardSection {
   readonly kind: 'card';
+  /** A creature definition (`Creature Giant Golem 6/6`), not a card: it has no cost and is never in a deck. */
+  readonly token?: true;
+  readonly heading: SourceLine;
+  readonly name: string;
+  readonly nameSpan: Span;
+  readonly lines: SourceLine[];
+}
+
+/** `Zone Suspend (per-player, public)` — a zone the document declares, with the rules it keeps. */
+interface ZoneSectionSrc {
+  readonly kind: 'zone';
+  readonly heading: SourceLine;
+  readonly name: string;
+  readonly nameSpan: Span;
+  readonly options: readonly string[];
+  readonly lines: SourceLine[];
+}
+
+/** `Contest Rock Paper Scissors` followed by `Rock beats Scissors.` lines. */
+interface ContestSectionSrc {
+  readonly kind: 'contest';
   readonly heading: SourceLine;
   readonly name: string;
   readonly nameSpan: Span;
@@ -224,12 +298,14 @@ interface BuffSectionSrc {
   readonly lines: SourceLine[];
 }
 
-type Section = CardSection | BuffSectionSrc;
+type Section = CardSection | BuffSectionSrc | ZoneSectionSrc | ContestSectionSrc;
 
 interface SplitResult {
   readonly sections: Section[];
   readonly cards: CardSection[];
   readonly buffs: BuffSectionSrc[];
+  readonly zoneSections: ZoneSectionSrc[];
+  readonly contestSections: ContestSectionSrc[];
   readonly diagnostics: Diagnostic[];
 }
 
@@ -258,6 +334,71 @@ function splitSections(text: string): SplitResult {
   for (const line of lines) {
     if (isIgnorable(line)) continue;
     const content = lineText(line);
+    // `Creature Giant Golem 6/6` — a creature definition, a card without a cost that effects make.
+    const definition = /^creature\s+(.+?)\s+(\d+)\s*\/\s*(\d+)\s*\.?$/i.exec(content);
+    if (definition) {
+      const name = definition[1]!.trim();
+      const at = line.contentStart + content.indexOf(name);
+      const header = (text: string): SourceLine => ({
+        text,
+        start: line.start,
+        contentStart: line.contentStart,
+        contentEnd: line.contentEnd,
+        number: line.number,
+      });
+      const section: CardSection = {
+        kind: 'card',
+        token: true,
+        heading: line,
+        name,
+        nameSpan: { start: at, end: at + name.length },
+        lines: [header('Cost 0'), header(`Creature ${definition[2]}/${definition[3]}`)],
+      };
+      sections.push(section);
+      current = section;
+      continue;
+    }
+    if (/^contest\b/i.test(content)) {
+      const { name, span } = headingName(line, 'Contest', false);
+      const section: ContestSectionSrc = { kind: 'contest', heading: line, name, nameSpan: span, lines: [] };
+      sections.push(section);
+      current = section;
+      if (name.length === 0) {
+        diagnostics.push({
+          severity: 'error',
+          message: 'a contest needs a name — write "Contest <name>", e.g. "Contest Rock Paper Scissors"',
+          code: 'contest-name-missing',
+          start: line.contentStart,
+          end: line.contentEnd,
+        });
+      }
+      continue;
+    }
+    const zoneHeading = /^zone\b/i.exec(content);
+    if (zoneHeading) {
+      const { name, span } = headingName(line, 'Zone', true);
+      const parens = /\(([^)]*)\)\s*$/.exec(content);
+      const section: ZoneSectionSrc = {
+        kind: 'zone',
+        heading: line,
+        name,
+        nameSpan: span,
+        options: parens ? parens[1]!.split(',').map((o) => o.trim().toLowerCase()).filter((o) => o.length > 0) : [],
+        lines: [],
+      };
+      sections.push(section);
+      current = section;
+      if (name.length === 0) {
+        diagnostics.push({
+          severity: 'error',
+          message: 'a zone needs a name — write "Zone <name>", e.g. "Zone Suspend (per-player, public)"',
+          code: 'zone-name-missing',
+          start: line.contentStart,
+          end: line.contentEnd,
+        });
+      }
+      continue;
+    }
     const heading = /^(card|buff)\b/i.exec(content);
     if (heading) {
       const keyword = heading[1]!;
@@ -307,7 +448,9 @@ function splitSections(text: string): SplitResult {
 
   const cards = sections.filter((s): s is CardSection => s.kind === 'card');
   const buffs = sections.filter((s): s is BuffSectionSrc => s.kind === 'buff');
-  return { sections, cards, buffs, diagnostics };
+  const zoneSections = sections.filter((s): s is ZoneSectionSrc => s.kind === 'zone');
+  const contestSections = sections.filter((s): s is ContestSectionSrc => s.kind === 'contest');
+  return { sections, cards, buffs, zoneSections, contestSections, diagnostics };
 }
 
 /* ---------------------- synthetic document + line map -------------------- */
@@ -383,6 +526,8 @@ type LineClass =
   | { readonly kind: 'cost'; readonly value: number }
   | { readonly kind: 'creature'; readonly power: number; readonly health: number }
   | { readonly kind: 'spell' }
+  | { readonly kind: 'entry'; readonly rules: EntryRules }
+  | { readonly kind: 'cardAbility'; readonly name: string; readonly body: string; readonly bodyStart: number }
   | { readonly kind: 'keyword'; readonly keyword: CardKeyword }
   /**
    * A line naming a **registered keyword** — `Taunt.`, or a keyword with
@@ -465,6 +610,14 @@ function classify(
       : { kind: 'unknown' };
   }
   if (/^spell\s*\.?\s*$/.test(lower)) return { kind: 'spell' };
+  const entry = parseEntryRule(content);
+  if (entry) return { kind: 'entry', rules: entry };
+  // `Suspend: Move this card to the Suspend zone with 5 counters on it.` — an ability the card has in hand.
+  const named = /^([A-Za-z][A-Za-z' -]*?)\s*:\s*(\S.*)$/.exec(content);
+  if (named && !/^(battlecry|deathrattle)$/i.test(named[1]!)) {
+    const colon = content.indexOf(':');
+    return { kind: 'cardAbility', name: named[1]!, body: named[2]!, bodyStart: line.contentStart + colon + 1 + (content.slice(colon + 1).length - content.slice(colon + 1).trimStart().length) };
+  }
   // A registered keyword: the longest registered spelling at the line's start.
   // The built-ins are registered by default, so this subsumes `Taunt.` and
   // `Charge.`; a host's `Discover(2).` arrives the same way.
@@ -486,6 +639,8 @@ function classify(
   }
   if (/^battlecry\b/.test(lower)) return { kind: 'legacy', word: 'battlecry' };
   if (/^deathrattle\b/.test(lower)) return { kind: 'legacy', word: 'deathrattle' };
+  // `When they are ready, reveal.` closes a sealed round: an ordinary sentence, not a trigger.
+  if (/^when\s+(they|all\s+players)\s+are\s+ready\b/.test(lower)) return { kind: 'effect' };
   if (/^when\b/.test(lower)) {
     const match = ENTERS_PLAY.exec(content);
     if (!match) return { kind: 'trigger' };
@@ -531,6 +686,8 @@ interface CardParse {
   readonly power: number | undefined;
   readonly health: number | undefined;
   readonly keywords: CardKeyword[];
+  readonly entry: EntryRules;
+  readonly cardAbilities: { readonly name: string; readonly body: string; readonly bodyStart: number; readonly line: SourceLine }[];
   /** Lines naming a registered keyword — legal, printed, maybe not executed. */
   readonly registered: { readonly line: SourceLine; readonly cls: Extract<LineClass, { kind: 'registered' }> }[];
   readonly diagnostics: Diagnostic[];
@@ -542,6 +699,9 @@ interface CardParse {
 function parseCard(section: CardSection, registry: KeywordRegistry): CardParse {
   const diagnostics: Diagnostic[] = [];
   const keywords: CardKeyword[] = [];
+  let entry: EntryRules = {};
+  const entryLines: SourceLine[] = [];
+  const cardAbilities: CardParse['cardAbilities'] = [];
   const registered: { line: SourceLine; cls: Extract<LineClass, { kind: 'registered' }> }[] = [];
   const effectLines: { line: SourceLine; cls: LineClass }[] = [];
   const keywordLines: SourceLine[] = [];
@@ -587,6 +747,15 @@ function parseCard(section: CardSection, registry: KeywordRegistry): CardParse {
         } else {
           kind = 'spell';
         }
+        break;
+      case 'cardAbility':
+        cardAbilities.push({ name: cls.name, body: cls.body, bodyStart: cls.bodyStart, line });
+        text.push(lineText(line));
+        break;
+      case 'entry':
+        entry = mergeEntry(entry, cls.rules);
+        entryLines.push(line);
+        text.push(lineText(line));
         break;
       case 'keyword':
         keywords.push(cls.keyword);
@@ -679,6 +848,9 @@ function parseCard(section: CardSection, registry: KeywordRegistry): CardParse {
   }
 
   if (kind === 'spell') {
+    for (const line of entryLines) {
+      fail(line, 'a spell never enters play — only a creature has something to say about the turn it enters play', 'card-spell-enters-play');
+    }
     for (const { line, cls } of effectLines) {
       if (cls.kind === 'entersPlay') {
         fail(line, 'a spell never enters play — write its effect as a plain sentence', 'card-spell-enters-play');
@@ -732,6 +904,8 @@ function parseCard(section: CardSection, registry: KeywordRegistry): CardParse {
     power,
     health,
     keywords,
+    entry,
+    cardAbilities,
     registered,
     diagnostics,
     effectLines,
@@ -755,6 +929,25 @@ function picksTarget(sentence: Sentence): boolean {
     case 'removeBuff':
     case 'toggleBuff':
       return sentence.chars.quantifier === 'target';
+    case 'roll':
+    case 'store':
+    case 'draw':
+    case 'scry':
+    case 'revealCard':
+    case 'castCard':
+    case 'moveCard':
+    case 'moveCards':
+    case 'revealCards':
+    case 'split':
+    case 'removeCounters':
+    case 'play':
+    case 'create':
+    case 'castCards':
+    case 'choosePile':
+    case 'zoneAbility':
+    case 'choose':
+    case 'reveal':
+    case 'moveChosen':
     case 'result':
       return false;
   }
@@ -778,6 +971,25 @@ export function compileCardDocument(text: string, options: CardCompileOptions = 
   };
   for (const diagnostic of split.diagnostics) push(diagnostic);
 
+  // Zones the document declares (`Zone Suspend (per-player, public)`) are known to every card
+  // and to the zone rules, on top of the host's. A copy: the host's dictionary is shared.
+  const hostZones = options.zones ?? emptyZoneDictionary();
+  const declaredZones = new ZoneDictionary(hostZones.names);
+  const zoneDefs: ZoneDef[] = [];
+  for (const section of split.zoneSections) {
+    if (section.name.length === 0) continue;
+    declaredZones.add(section.name);
+    zoneDefs.push(zoneDefOf(section));
+  }
+  // Contests the document defines (`Contest Rock Paper Scissors`) can be played by name.
+  const contests: ContestIR[] = [...(options.contests ?? [])];
+  for (const section of split.contestSections) {
+    const defined = contestOf(section, push);
+    if (defined) contests.push(defined);
+  }
+  const creatureNames = split.cards.filter((section) => section.token).map((section) => section.name);
+  options = { ...options, zones: declaredZones, contests, creatures: [...(options.creatures ?? []), ...creatureNames] };
+
   // Declared buffs are document-level: compile them once as a library, so a
   // buff's body is checked in one place and its `BuffDef` is built once.
   const libraryLines: SynthLine[] = [
@@ -786,13 +998,28 @@ export function compileCardDocument(text: string, options: CardCompileOptions = 
       origin: { contentStart: 0, contentEnd: 0, synthPrefix: 0, wholeSpan: { start: 0, end: 0 } },
     },
     ...split.buffs.flatMap((section) => [verbatim(section.heading), ...section.lines.map(verbatim)]),
+    ...split.zoneSections.flatMap((section) => [
+      {
+        // The heading without its option list: the options declare the zone, they are not part of its rules.
+        text: `Zone ${section.name}`,
+        origin: {
+          contentStart: section.heading.contentStart,
+          contentEnd: section.heading.contentEnd,
+          synthPrefix: 0,
+          wholeSpan: { start: section.heading.contentStart, end: section.heading.contentEnd },
+        },
+      },
+      ...section.lines.map(verbatim),
+    ]),
   ];
   let buffDefs: readonly BuffDef[] = [];
+  let zoneBindings: readonly ZoneBinding[] = [];
   const used = new Set<string>();
-  if (split.buffs.length > 0) {
+  if (split.buffs.length > 0 || split.zoneSections.length > 0) {
     const library = buildSynthetic(libraryLines, text.length);
     const compiled = compileDocument(library.text, { ...options, dictionary: hostDictionary });
     buffDefs = compiled.buffs;
+    zoneBindings = compiled.zones;
     collectBuffReferences(compiled.doc, used);
     for (const diagnostic of compiled.diagnostics) {
       // Unused-buff is answered below, from the whole document at once.
@@ -804,7 +1031,7 @@ export function compileCardDocument(text: string, options: CardCompileOptions = 
   // Every card compiles as its own ability document, with the document's
   // buff headings appended (names only) so `Add <buff>` resolves.
   const cards: CompiledCard[] = [];
-  const zones = options.zones ?? emptyZoneDictionary();
+  const zones = declaredZones;
   for (const section of split.cards) {
     const parsed = parseCard(section, keywords);
     for (const diagnostic of parsed.diagnostics) push(diagnostic);
@@ -882,6 +1109,19 @@ export function compileCardDocument(text: string, options: CardCompileOptions = 
       push(remap(diagnostic, synthetic, text.length));
     }
 
+    // Abilities the card gives itself, usable from the hand.
+    const handAbilities: { name: string; ability: ManualAbility }[] = [];
+    for (const own of parsed.cardAbilities) {
+      const body = compileDocument(`Ability ${own.name}\n${own.body}`, { ...options, dictionary: hostDictionary });
+      for (const diagnostic of body.diagnostics) {
+        if (diagnostic.code === 'unused-buff') continue;
+        const at = own.bodyStart;
+        push({ ...diagnostic, start: at, end: Math.max(at + 1, own.line.contentEnd) });
+      }
+      const ability = body.abilities[0];
+      if (ability) handAbilities.push({ name: own.name, ability });
+    }
+
     const document = compiled.doc.abilities[0];
     const picks = document?.sentences.some(picksTarget) === true || (document?.targets?.length ?? 0) > 0;
     const ability = oneShot ? compiled.abilities[0] : undefined;
@@ -894,6 +1134,9 @@ export function compileCardDocument(text: string, options: CardCompileOptions = 
         ? { power: parsed.power ?? 0, health: parsed.health ?? 1 }
         : {}),
       keywords: parsed.keywords,
+      ...(section.token ? { token: true as const } : {}),
+      ...(Object.keys(parsed.entry).length > 0 ? { entry: parsed.entry } : {}),
+      handAbilities,
       ...(ability ? { ability } : {}),
       ...(ability && picks ? { targeting: ability.targeting } : {}),
       ...(entersFrom !== undefined ? { entersFrom } : {}),
@@ -923,10 +1166,38 @@ export function compileCardDocument(text: string, options: CardCompileOptions = 
     cards,
     buffs: split.buffs.map((section) => ({ name: section.name, span: section.nameSpan })),
     buffDefs,
+    zoneDefs,
+    zones: zoneBindings,
   };
 }
 
 /* -------------------------------- helpers -------------------------------- */
+
+/** A `Contest` section as data — see `contest.ts` for the rules it can state. */
+function contestOf(section: ContestSectionSrc, push: (diagnostic: Diagnostic) => void): ContestIR | undefined {
+  const { contest, problems } = parseContest(
+    section.name,
+    section.lines.map((line) => ({ text: lineText(line), start: line.contentStart, end: line.contentEnd })),
+  );
+  for (const problem of problems) push({ severity: 'error', ...problem });
+  return contest;
+}
+
+/**
+ * The zone a `Zone` heading declares. Options, comma separated: `per-player` or `shared`
+ * (default shared); `public`, `owner` or `hidden` for who may look (default public);
+ * `ordered`; `owner-only` (only its owner's cards may be put in).
+ */
+function zoneDefOf(section: ZoneSectionSrc): ZoneDef {
+  const has = (option: string): boolean => section.options.includes(option);
+  return {
+    id: section.name,
+    scope: has('per-player') ? 'per-player' : 'shared',
+    visibility: has('hidden') ? 'hidden' : has('owner') ? 'owner' : 'public',
+    ...(has('ordered') ? { ordered: true } : {}),
+    ...(has('owner-only') ? { ownerOnly: true } : {}),
+  };
+}
 
 /**
  * Every buff name a compiled document references — from sentences, from
@@ -960,6 +1231,27 @@ function collectBuffReferences(doc: Doc, into: Set<string>): void {
       case 'destroy':
         visitChars(sentence.chars);
         break;
+      case 'roll':
+        for (const row of sentence.table ?? []) for (const nested of row.sentences) visit(nested);
+        break;
+      case 'store':
+      case 'draw':
+      case 'scry':
+      case 'revealCard':
+      case 'castCard':
+      case 'moveCard':
+      case 'moveCards':
+      case 'revealCards':
+      case 'split':
+      case 'removeCounters':
+      case 'play':
+      case 'create':
+      case 'castCards':
+      case 'choosePile':
+      case 'zoneAbility':
+      case 'choose':
+      case 'reveal':
+      case 'moveChosen':
       case 'result':
         break;
     }

@@ -35,7 +35,13 @@ export type CardRuleAction =
   /** The side's creatures may attack again this turn. */
   | { readonly kind: 'wake-creatures' }
   /** Draws cards (fatigue applies when the deck runs out). */
-  | { readonly kind: 'draw'; readonly count: number };
+  | { readonly kind: 'draw'; readonly count: number }
+  /**
+   * The creature that just entered play cannot act — use an ability, attack — until its
+   * controller's next turn, except as its card says (`This can attack the turn it enters
+   * play.`, Charge). Only meaningful at `creature:enters`.
+   */
+  | { readonly kind: 'summoning-sickness' };
 
 export type CardRule = GameRule<CardRuleAction>;
 
@@ -65,6 +71,14 @@ export const CARD_RULES: readonly CardRule[] = [
     at: 'turn:start',
     affects: 'turn-owner',
     actions: [{ kind: 'wake-creatures' }],
+  },
+  {
+    id: 'summoning-sickness',
+    name: 'A creature cannot act the turn it enters play.',
+    at: 'creature:enters',
+    // The side the creature enters on, not whoever's turn it is.
+    affects: 'turn-owner',
+    actions: [{ kind: 'summoning-sickness' }],
   },
   {
     id: 'draw',

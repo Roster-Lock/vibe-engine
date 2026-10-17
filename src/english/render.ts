@@ -34,6 +34,7 @@ import type {
   ActionMatchIR,
   ActionRewriteIR,
   BuffIR,
+  ChoosersIR,
   DocumentIR,
   EffectIR,
   EntityQueryIR,
@@ -45,6 +46,8 @@ import type {
   ValueIR,
 } from '../ir/index.js';
 import { mathToSource } from '../ir/math-expression.js';
+import { REVEAL_CARD_TEXT, REVEAL_TEXT, castCardText, chooseText, moveCardText, moveCardsText, ownerWords, removeCountersText, castCardsText, playText, createText, revealCardsText, splitText, choosePileText, zoneAbilityText, drawText, scryText, moveChosenText, rollPhrase, rollText, storeText, votesPhrase } from './rounds.js';
+import { rollStatOfPath, variableNameOfPath, votesOptionOfPath } from './describe.js';
 import { EVENT_PHRASES } from './vocabulary.js';
 
 /**
@@ -113,6 +116,17 @@ class Renderer {
    * `undefined` after calling this, because a marker inside a formula would
    * be nonsense; the line-level assembler turns the failure into a `#` note.
    */
+  /**
+   * Who chose in each round seen so far, by round name. A `moveChosen` has no
+   * players of its own — it moves what the *choosers* picked — so its sentence
+   * is worded from the `choose` that opened the round, which always renders first.
+   */
+  readonly #choosers = new Map<string, { players: ChoosersIR; secret: boolean }>();
+
+  #chosenBy(round: string): { players: ChoosersIR; secret: boolean } {
+    return this.#choosers.get(round) ?? { players: 'each', secret: false };
+  }
+
   #fail(reason: string, node: unknown): undefined {
     this.gaps.push({ reason, node });
     return undefined;
@@ -135,7 +149,16 @@ class Renderer {
   /** A number, or the written formula in parentheses. */
   #value(value: ValueIR): string | undefined {
     if (value.kind === 'const') return String(value.value);
-    if (value.kind === 'expr') return `(${mathToSource(value.expression)})`;
+    if (value.kind === 'rolled') return rollPhrase(value.stat);
+    if (value.kind === 'variable') return value.name;
+    if (value.kind === 'votes') return votesPhrase(value.option);
+    if (value.kind === 'expr') {
+      const stat = rollStatOfPath(value.expression);
+      if (stat) return rollPhrase(stat);
+      const votes = votesOptionOfPath(value.expression);
+      if (votes !== undefined) return votesPhrase(votes);
+      return variableNameOfPath(value.expression) ?? `(${mathToSource(value.expression)})`;
+    }
     if (value.kind === 'count') return this.#fail('an amount that counts characters (a block-view amount)', value);
     return this.#fail('an amount read from a gauge (a block-view amount)', value);
   }
@@ -208,8 +231,8 @@ class Renderer {
     parts.push(options.singular ? 'character' : 'characters');
     const rest: PredicateIR[] = [];
     for (const clause of this.#conjuncts(query.filter)) {
-      if (clause.kind === 'relation' && (clause.to === 'you' || clause.to === 'opponent')) {
-        parts.push('owned by', clause.to === 'you' ? 'you' : 'the opponent');
+      if (clause.kind === 'relation' && (clause.to === 'you' || clause.to === 'opponent' || clause.to === 'winners' || clause.to === 'losers')) {
+        parts.push('owned by', ownerWords(clause.to));
       } else if (clause.kind === 'relation' && (clause.to === 'ally' || clause.to === 'enemy')) {
         // `enemy` is already the phrase's adjective; a second spelling of it
         // would render as "all enemy characters enemy", so require agreement.
@@ -336,7 +359,54 @@ class Renderer {
       if (subject === undefined) return undefined;
       return `If ${predicate.kind} ${subject.replace(/^all (other )?/, '$1')} has ${test}, `;
     }
+    const value = this.#valueGuard(predicate);
+    if (value !== undefined) return value;
     return this.#fail('a condition the `if` frame cannot express', predicate);
+  }
+
+  /**
+   * `If that total is 10 or more, ` — a comparison on a number. Only values the
+   * language can name are read this way (a roll, a stored name, a formula); a
+   * comparison on a gauge or a count is some other phrase's, not this one's.
+   */
+  #valueGuard(predicate: PredicateIR): string | undefined {
+    const nameable = (value: ValueIR): boolean =>
+      value.kind === 'rolled' || value.kind === 'votes' || value.kind === 'variable' || value.kind === 'expr' || value.kind === 'const';
+    const same = (a: ValueIR, b: ValueIR): boolean => JSON.stringify(a) === JSON.stringify(b);
+    // `N to M`: both bounds on the same value.
+    if (predicate.kind === 'and' && predicate.clauses.length === 2) {
+      const [low, high] = predicate.clauses;
+      if (
+        low?.kind === 'compare' &&
+        high?.kind === 'compare' &&
+        low.op === '>=' &&
+        high.op === '<=' &&
+        nameable(low.left) &&
+        same(low.left, high.left) &&
+        low.right.kind === 'const' &&
+        high.right.kind === 'const'
+      ) {
+        const value = this.#value(low.left);
+        return value === undefined ? undefined : `If ${value} is ${low.right.value} to ${high.right.value}, `;
+      }
+      return undefined;
+    }
+    if (predicate.kind !== 'compare' || !nameable(predicate.left)) return undefined;
+    const value = this.#value(predicate.left);
+    if (value === undefined) return undefined;
+    const { op, right } = predicate;
+    if (right.kind === 'const') {
+      if (op === '=') return `If ${value} is ${right.value}, `;
+      if (op === '>=') return `If ${value} is ${right.value} or more, `;
+      if (op === '<=') return `If ${value} is ${right.value} or less, `;
+    }
+    if (op === '>' || op === '<' || op === '=') {
+      const other = this.#value(right);
+      if (other === undefined) return undefined;
+      const word = op === '>' ? 'higher than' : op === '<' ? 'lower than' : 'the same as';
+      return `If ${value} is ${word} ${other}, `;
+    }
+    return undefined;
   }
 
   /* ------------------------------ modifiers ---------------------------- */
@@ -356,7 +426,7 @@ class Renderer {
     }
     if (who) parts.push(who);
     parts.push('characters');
-    if (owner) parts.push('owned by', owner === 'you' ? 'you' : 'the opponent');
+    if (owner) parts.push('owned by', ownerWords(owner as 'you' | 'opponent'));
     const leftover = this.#conjunction(rest);
     const withText = this.#withClause(leftover);
     if (leftover && withText === undefined) return undefined;
@@ -449,6 +519,75 @@ class Renderer {
         const chars = this.#query(effect.query, ability);
         return chars === undefined ? undefined : `Toggle ${effect.buff} on ${chars}.`;
       }
+      case 'roll': {
+        if (effect.count.kind !== 'const' || effect.sides.kind !== 'const') {
+          return this.#fail('a roll whose dice are computed (a block-view effect)', effect);
+        }
+        return rollText(effect.count.value, effect.sides.value);
+      }
+      case 'table':
+        return this.#fail('a table of results away from its roll', effect);
+      case 'zoneAbility':
+        // The ability is named by its id in the IR; the document knows its name.
+        return zoneAbilityText(effect.owners, effect.zone, this.#abilityNames.get(effect.ability) ?? effect.ability, effect.users, effect.remove === true);
+      case 'revealCard':
+        return REVEAL_CARD_TEXT;
+      case 'castCard':
+        return castCardText(effect.otherwise);
+      case 'moveCard':
+        return moveCardText(effect.to, effect.article, effect.counters);
+      case 'create':
+        return createText(effect.players, effect.creature);
+      case 'play':
+        return playText(effect.players, effect.contest);
+      case 'removeCounters':
+        return removeCountersText(effect.count, effect.counterKind, effect.select, effect.from);
+      case 'castCards':
+        return castCardsText(effect.select, effect.from, effect.free);
+      case 'moveCards':
+        return moveCardsText(effect.select, effect.from, effect.to, effect.order, effect.rest);
+      case 'revealCards':
+        return revealCardsText(effect.select, effect.from);
+      case 'split':
+        return splitText(effect.chooser, effect.from, effect.into);
+      case 'choosePile':
+        return choosePileText(effect.options);
+      case 'store': {
+        const value = this.#value(effect.value);
+        return value === undefined ? undefined : storeText(value, effect.name);
+      }
+      case 'draw': {
+        const count = this.#value(effect.count);
+        return count === undefined ? undefined : drawText(count, effect.players);
+      }
+      case 'scry': {
+        const count = this.#value(effect.count);
+        return count === undefined ? undefined : scryText(count, effect.players, effect.surveil === true);
+      }
+      case 'choose': {
+        this.#choosers.set(effect.round, { players: effect.players, secret: effect.secret });
+        if (effect.pick.kind === 'card') {
+          return chooseText(effect.players, { kind: 'card', zone: effect.pick.from }, effect.secret);
+        }
+        if (effect.pick.kind === 'label') {
+          if (effect.players !== 'each') return this.#fail('a vote that not every player casts', effect);
+          return chooseText(effect.players, { kind: 'label', options: effect.pick.options }, effect.secret, effect.order);
+        }
+        const { min, max } = effect.pick;
+        if (min.kind !== 'const' || max.kind !== 'const') {
+          return this.#fail('a number range that is not a plain number', effect);
+        }
+        return chooseText(effect.players, { kind: 'number', min: min.value, max: max.value }, effect.secret);
+      }
+      case 'reveal':
+        return REVEAL_TEXT;
+      case 'moveChosen':
+        {
+          const who = this.#chosenBy(effect.round);
+          return moveChosenText(who.players, effect.to, who.secret);
+        }
+      case 'discover':
+        return this.#fail('a discover effect (not yet written in English)', effect);
       case 'result':
         return `${effect.players === 'you' ? 'You' : 'All players'} ${effect.win ? 'win' : 'lose'} the game.`;
     }
@@ -511,6 +650,11 @@ class Renderer {
    * that grouping is re-derived rather than written.
    */
   #stepLines(step: StepIR, ability: AbilityIR | undefined, allowMultiple: boolean): string[] {
+    // A roll with its table is one step of two effects: `Roll a d20.` and its lines.
+    const [rolled, table] = step.effects;
+    if (step.effects.length === 2 && rolled?.kind === 'roll' && table?.kind === 'table') {
+      return this.#rollTableLines(step, rolled, table, ability);
+    }
     const gated = step.optional === true || step.when !== undefined || step.repeat !== undefined;
     if (step.effects.length > 1 && (!allowMultiple || gated)) {
       return [this.#note(this.#gapReason('a step holding several effects at once', step))];
@@ -518,6 +662,38 @@ class Renderer {
     const lines: string[] = [];
     for (const effect of step.effects) {
       lines.push(this.#orNote(this.#sentence(step, effect, ability)));
+    }
+    return lines;
+  }
+
+  /**
+   * `Roll a d20.` and one indented line per result, in the Deck of Many Things
+   * shape. A table that reads anything but the roll just made is not something
+   * the sentence grammar can say, so it is a marked gap.
+   */
+  #rollTableLines(
+    step: StepIR,
+    roll: Extract<EffectIR, { kind: 'roll' }>,
+    table: Extract<EffectIR, { kind: 'table' }>,
+    ability: AbilityIR | undefined,
+  ): string[] {
+    const head = this.#orNote(this.#sentence(step, roll, ability));
+    if (table.on.kind !== 'rolled' || table.on.stat !== 'total') {
+      return [head, this.#note(this.#gapReason('a table that reads something other than the roll just made', table))];
+    }
+    const lines = [head];
+    for (const row of table.rows) {
+      const header = row.otherwise
+        ? 'Otherwise'
+        : row.max === null
+          ? `${row.min} or more`
+          : row.min === 0
+            ? `${row.max} or less`
+            : row.min === row.max
+              ? String(row.min)
+              : `${row.min} to ${row.max}`;
+      const body = row.steps.flatMap((inner) => this.#stepLines(inner, ability, false)).join(' ');
+      lines.push(`  ${header}: ${body}`);
     }
     return lines;
   }
@@ -580,7 +756,7 @@ class Renderer {
       if (who) parts.push(who);
       parts.push('characters');
     }
-    if (owner) parts.push('owned by', owner === 'you' ? 'you' : 'the opponent');
+    if (owner) parts.push('owned by', ownerWords(owner as 'you' | 'opponent'));
     const leftover = this.#conjunction(rest);
     const withText = this.#withClause(leftover);
     if (leftover && withText === undefined) return undefined;
@@ -681,13 +857,23 @@ class Renderer {
 
   /* ------------------------------ documents ---------------------------- */
 
+  /** Ability ids to the names they are written with. */
+  readonly #abilityNames = new Map<string, string>();
+
   document(ir: DocumentIR): RenderResult {
+    for (const ability of ir.abilities) this.#abilityNames.set(ability.id, ability.name);
     const blocks: string[][] = [];
     if (ir.imports.length > 0) {
       blocks.push(ir.imports.map((entry) => `import ${entry.name} from "${entry.path}"`));
     }
     for (const ability of ir.abilities) blocks.push(this.#abilityLines(ability));
     for (const buff of ir.buffs) blocks.push(this.#buffLines(buff));
+    for (const zone of ir.zones ?? []) {
+      blocks.push([
+        `Zone ${zone.zone}`,
+        ...zone.steps.flatMap((step) => this.#stepLines(step, undefined, false)),
+      ]);
+    }
     if (ir.triggers.length > 0) {
       blocks.push(ir.triggers.map((trigger) => this.#orNote(this.#trigger(trigger, undefined))));
     }

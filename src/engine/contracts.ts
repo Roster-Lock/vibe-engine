@@ -40,11 +40,13 @@
  * Types here are erased, so the type-only cycle with `events.ts` and
  * `actions.ts` costs nothing at runtime.
  */
-import type { ActionDirection, GaugeAction, MoveAction, AddBuffAction, RemoveBuffAction, DestroyAction, TransformAction, PopTransformAction, DiscoverAction } from './actions.js';
+import type { ActionDirection, GaugeAction, MoveAction, AddBuffAction, RemoveBuffAction, DestroyAction, TransformAction, PopTransformAction, DiscoverAction, RollAction } from './actions.js';
 import type { CharacterDestroyedBatchEvent, CharacterDestroyedEvent, CharacterSurvivedBatchEvent, CharacterSurvivedEvent, CharacterTransformedBatchEvent, CharacterTransformedEvent, BuffAddedEvent, BuffDestroyedBatchEvent, BuffDestroyedEvent, EventSource, GaugeChangedBatchEvent, GaugeChangedEvent, GaugeMaxChangedEvent, StatChangedEvent, ZoneChangedBatchEvent, ZoneChangedEvent } from './events.js';
 import type { Ability, Targeting } from './ability/index.js';
 import type { Buff } from './status/index.js';
 import type { Character } from './character.js';
+import type { ChoiceAnswer } from './choice.js';
+import type { Player } from './player.js';
 
 /* ------------------------------------------------------------------ */
 /*  Actions                                                            */
@@ -96,6 +98,8 @@ export interface ActionMap {
    * *game-specific* is only the numbers the content passes.
    */
   discover: DiscoverAction;
+  /** Roll dice. See `RollAction`. */
+  roll: RollAction;
 }
 
 /** Every action the engine can execute — the union of `ActionMap`. */
@@ -125,6 +129,43 @@ export interface GameEventMap {
   'buff:added': BuffAddedEvent;
   'buff:destroyed': BuffDestroyedEvent;
   'buff:destroyed:batch': BuffDestroyedBatchEvent;
+  /** A player has answered a sealed round. Carries **no** content — only that they are ready. */
+  'choice:ready': { type: 'choice:ready'; player: Player };
+  /** A sealed round opened: every answer, at once, in chooser order. */
+  'choice:revealed': {
+    type: 'choice:revealed';
+    answers: readonly { readonly player: Player; readonly answer: ChoiceAnswer }[];
+  };
+  /**
+   * Dice were rolled. `results` are final — after the roller answered and every
+   * adjustment applied. `source` is absent for a roll nobody caused.
+   */
+  'roll:made': {
+    type: 'roll:made';
+    count: number;
+    sides: number;
+    results: readonly number[];
+    source?: EventSource;
+  };
+  /**
+   * A commitment was invalid, vague or changed, so its player forfeits the
+   * round. Announced after `choice:revealed`, which carries the valid answers.
+   */
+  'choice:forfeited': { type: 'choice:forfeited'; player: Player; reason: string };
+  /**
+   * A scope ran out of gas — almost certainly an infinite loop. Announced once, before
+   * the `OutOfGasError` propagates, so an observer can log or show what happened.
+   */
+  'gas:exhausted': { type: 'gas:exhausted'; label: string; used: number; limit: number };
+  /**
+   * Players were given a capability on a card (`see`, or a game's `cast`…).
+   * Announced **without the card**: the table learns that a look happened, or that
+   * someone may now cast something, and who — as it would physically — not which
+   * card it is.
+   */
+  'grant:added': { type: 'grant:added'; capability: string; players: readonly Player[]; count: number };
+  /** A grant ended (the card left its zone, the effect or turn finished, its source was revoked, or `end()`). */
+  'grant:removed': { type: 'grant:removed'; capability: string; players: readonly Player[]; count: number };
   'cycle:detected': { type: 'cycle:detected'; grantor: Buff; attemptedId: string };
   'character:transformed': CharacterTransformedEvent;
   'character:transformed:batch': CharacterTransformedBatchEvent;

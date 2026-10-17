@@ -19,6 +19,7 @@ import {
   GameEndInterrupt,
   GameEngine,
   Player,
+  chosenCharacters,
   commitSecret,
   type Decision,
   type GameEvent,
@@ -66,7 +67,7 @@ export class ScriptedPlayer extends Player {
       decisions.push({
         character,
         ability,
-        targets: answer.kind === 'select' ? [...answer.chosen] : [],
+        targets: chosenCharacters(answer),
       });
     }
     return decisions;

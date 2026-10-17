@@ -68,7 +68,7 @@ describe('ordering triggers in the card game', () => {
 
     const side = game.sideOf(human);
     const card = side.hand.cards[0]!;
-    expect(card.id).toBe('authored-test-herald');
+    expect(card.printedId).toBe('authored-test-herald');
     human.submitMove({ kind: 'play', card, targets: [] });
 
     await waitFor(() => human.isOrdering, 'the trigger-ordering question');

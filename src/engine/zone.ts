@@ -20,6 +20,7 @@
  * ordering and target-pool order depend on it, so it is not derived from
  * zone membership.
  */
+import type { ManualAbility } from './ability/manual.js';
 import type { Player } from './player.js';
 import { shuffle } from './seed.js';
 
@@ -49,6 +50,22 @@ export interface Entity {
   readonly type: string;
   readonly name: string;
   /**
+   * **A unique id for this one object** — two copies of the same card have
+   * different ids. For online and computer play a card choice is just this id: it
+   * names exactly one option, so it can never be vague. Optional so an entity
+   * that is never chosen need not carry one; a game that lets players choose
+   * cards gives every card one. Unique within a request's options, or the
+   * request is refused.
+   */
+  readonly id?: string;
+  /**
+   * **A written marker that tells look-alikes apart** — the number on a token,
+   * the letter on a goblin card. Two creatures both named "Goblin" are one vague
+   * answer to "which?", so a commitment to either needs something a player can
+   * write down. Defaults to `name` (see `markersFor`, `src/engine/choice.ts`).
+   */
+  readonly marker?: string;
+  /**
    * **Any numeric fact a game wants asked about this entity**, by name — a
    * card's mana cost, a land flag (1/0), a printed power, a crew rating.
    *
@@ -69,6 +86,13 @@ export interface Entity {
    * question after "is this a land" is "what does it cost".
    */
   readonly attributes?: ReadonlyMap<string, number | boolean>;
+  /**
+   * **The player who owns this entity** — whose it is, as opposed to who controls or
+   * holds it right now. Optional: a game that never takes a card from its owner need not
+   * say. Where it is set, a zone declared `ownerOnly` refuses the entity unless the zone
+   * is its owner's.
+   */
+  readonly owner?: Player;
 }
 
 /** Who may see a zone's contents. */
@@ -82,13 +106,32 @@ export type ZoneVisibility =
    * owner*, which is what makes networked play possible without trusting a
    * client.
    */
-  | 'hidden';
+  | 'hidden'
+  /**
+   * **Exactly the players on the zone's viewer list** (`Zone.viewers`, set with
+   * `engine.setViewers`) — "everyone but the owner can see it", "the targeted
+   * player may look". The declaration is data and names no roles; the list is
+   * state, built while the game runs by whatever keyword says who may look. Until
+   * something sets it the list is empty and the zone behaves like `hidden`.
+   */
+  | 'custom';
 
 /** One shared zone, or one instance per player. */
 export type ZoneScope = 'shared' | 'per-player';
 
-/** Where an entity lands in an ordered zone. */
-export type ZonePosition = 'top' | 'bottom' | number;
+/**
+ * Where an entity lands in an ordered zone.
+ *
+ * A bare `number` is a 0-based index from the top (0 is the top). `{ nth, from }`
+ * is the way cards say it — *"third from the top"*, *"seventh from the bottom"* —
+ * and is **1-based**, so `{ nth: 1, from: 'top' }` is `'top'` and
+ * `{ nth: 1, from: 'bottom' }` is `'bottom'`. It names where the entity ends up,
+ * and clamps: a zone too short for "seventh from the top" puts it at the bottom.
+ */
+export type ZonePosition = 'top' | 'bottom' | number | { readonly nth: number; readonly from: ZoneEnd };
+
+/** Which end of an ordered zone a position or a section is counted from. */
+export type ZoneEnd = 'top' | 'bottom';
 
 /** A zone declaration — plain data, so it can travel in shared content. */
 export interface ZoneDef {
@@ -99,6 +142,13 @@ export interface ZoneDef {
   readonly visibility?: ZoneVisibility;
   /** Defaults to `'shared'`. */
   readonly scope?: ZoneScope;
+  /**
+   * A per-player zone that **only holds its own player's cards** — a hand, a library, a
+   * graveyard. An entity with an `owner` can only be put in the instance that belongs to
+   * that owner; anything else throws before the move happens. To hold another player's
+   * card (a stolen one that can be cast) a game declares a different zone.
+   */
+  readonly ownerOnly?: boolean;
   /** Whether `validTargets` draws from it. Defaults to `false` — only `play` does. */
   readonly targetable?: boolean;
   /**
@@ -146,6 +196,7 @@ export const GARBAGE: ZoneDef = {
   id: 'garbage',
   visibility: 'public',
   scope: 'per-player',
+  ownerOnly: true,
   group: REMOVED,
 };
 
@@ -165,6 +216,8 @@ export class Zone {
   readonly targetable: boolean;
   readonly group: string | undefined;
   readonly capacity: number | undefined;
+  /** Holds only its owner's cards (see `ZoneDef.ownerOnly`). */
+  readonly ownerOnly: boolean;
   /** The player this instance belongs to, for a `per-player` zone. */
   readonly owner: Player | undefined;
 
@@ -179,8 +232,38 @@ export class Zone {
     this.targetable = def.targetable ?? false;
     this.group = def.group;
     this.capacity = def.capacity;
+    this.ownerOnly = def.ownerOnly === true;
     this.owner = owner;
   }
+
+  /**
+   * The players who may see this zone's cards when its visibility is `'custom'`.
+   * Empty until set; ignored for every other visibility.
+   */
+  get viewers(): readonly Player[] {
+    return this._viewers;
+  }
+
+  /** @internal — `GameEngine.setViewers` owns mutation. */
+  _viewers: Player[] = [];
+
+  /**
+   * The abilities every card in this zone has **while it is here**, though it did
+   * not print them — a Boxed Present zone's *Open Present*. Empty until set with
+   * `engine.setZoneAbilities`; like the viewer list, standing state set while the
+   * game runs, not part of the declaration.
+   */
+  get abilities(): readonly ManualAbility[] {
+    return this._abilities.map((entry) => entry.ability);
+  }
+
+  /** Each ability the zone gives, with the players who may use *it*. */
+  get abilityEntries(): readonly { readonly ability: ManualAbility; readonly users: readonly Player[] }[] {
+    return this._abilities;
+  }
+
+  /** @internal — `GameEngine.setZoneAbilities` / `addZoneAbility` own mutation. */
+  _abilities: { ability: ManualAbility; users: Player[] }[] = [];
 
   /** The zone's contents. For an ordered zone, index 0 is the **top**. */
   get members(): readonly Entity[] {
@@ -203,6 +286,27 @@ export class Zone {
   /** The top of an ordered zone (a deck's next draw). */
   get top(): Entity | undefined {
     return this._members[0];
+  }
+
+  /**
+   * The `nth` entity (1-based) counted from one end of an ordered zone — "the
+   * seventh card from the top". Undefined for an unordered zone, or one too
+   * short. A bag has no ends, and picking one would be a silent lie.
+   */
+  nth(nth: number, from: ZoneEnd = 'top'): Entity | undefined {
+    if (!this.ordered || !Number.isInteger(nth) || nth < 1 || nth > this._members.length) return undefined;
+    return this._members[from === 'top' ? nth - 1 : this._members.length - nth];
+  }
+
+  /**
+   * The first `count` entities from one end, **in zone order** (index 0 is the
+   * top, whichever end was asked for) — the section a scry looks at. Empty for
+   * an unordered zone.
+   */
+  section(count: number, from: ZoneEnd = 'top'): readonly Entity[] {
+    if (!this.ordered || count <= 0) return [];
+    const n = Math.min(count, this._members.length);
+    return from === 'top' ? this._members.slice(0, n) : this._members.slice(this._members.length - n);
   }
 
   /** A stable key: the id, plus the owner for a per-player instance. */
@@ -259,6 +363,18 @@ export class ZoneRegistry {
     const zone = new Zone(def);
     this.#shared.set(def.id, zone);
     return zone;
+  }
+
+  /**
+   * Removes a zone that was declared for a moment — a temporary pile an effect made. It must
+   * be empty (move its cards out first); a zone content references by name is never removed.
+   */
+  undeclare(id: string): boolean {
+    const zone = this.#shared.get(id);
+    if (zone && zone._members.length > 0) throw new Error(`ZoneRegistry: zone "${id}" still holds ${zone._members.length} card(s)`);
+    this.#shared.delete(id);
+    this.#perPlayer.delete(id);
+    return this.#defs.delete(id);
   }
 
   get definitions(): readonly ZoneDef[] {
@@ -355,6 +471,7 @@ export class ZoneRegistry {
    */
   add(entity: Entity, zone: Zone, position: ZonePosition = 'bottom'): boolean {
     if (this.#of.has(entity)) return false;
+    this.#admit(entity, zone);
     this.#order.push(entity);
     this.#place(entity, zone, position);
     return true;
@@ -369,6 +486,7 @@ export class ZoneRegistry {
     const from = this.#of.get(entity);
     if (!from) return undefined;
     if (from === to) return undefined;
+    this.#admit(entity, to);
     this.#pull(entity, from);
     this.#place(entity, to, position);
     return { entity, from, to };
@@ -397,9 +515,71 @@ export class ZoneRegistry {
     shuffle(zone._members, rng);
   }
 
+  /**
+   * Moves an entity to a new position **within the zone it is already in** —
+   * top to bottom, bottom to top, "put it third from the top".
+   *
+   * Not a `move`: it never leaves its zone, so there is no `zone:changed` to
+   * announce, and like a shuffle it only changes what is hidden. Returns false
+   * for an unregistered entity or an unordered zone (a bag has no positions).
+   */
+  reposition(entity: Entity, position: ZonePosition): boolean {
+    const zone = this.#of.get(entity);
+    if (!zone?.ordered) return false;
+    this.#pull(entity, zone);
+    this.#place(entity, zone, position);
+    return true;
+  }
+
+  /**
+   * **Rearranges the first `count` entities** of an ordered zone (from either
+   * end) — the commit step of a scry. `top` are put back at the top in the
+   * order given; `bottom` go to the bottom in the order given. Together they
+   * must be exactly that section, no more and no less: dropping a card or
+   * smuggling one in from deeper is a content bug, so it throws.
+   *
+   * The two lists are the *new* order of the section, so "scry 3, keep the first
+   * on top, bottom the others" is `{ top: [a], bottom: [b, c] }`. Returns the
+   * section as it was, for the caller's log.
+   */
+  arrange(
+    zone: Zone,
+    count: number,
+    placement: { readonly top?: readonly Entity[]; readonly bottom?: readonly Entity[] },
+    from: ZoneEnd = 'top',
+  ): readonly Entity[] {
+    const before = zone.section(count, from);
+    const top = placement.top ?? [];
+    const bottom = placement.bottom ?? [];
+    const placed = [...top, ...bottom];
+    const valid =
+      placed.length === before.length &&
+      new Set(placed).size === placed.length &&
+      placed.every((entity) => before.includes(entity));
+    if (!valid) {
+      throw new Error(`arrange: the placement must be exactly the ${before.length} entities of the section`);
+    }
+    // Pull the whole section, then re-place: the top ones in reverse onto the
+    // top (so the first listed ends up first), the bottom ones in order.
+    for (const entity of placed) this.#pull(entity, zone);
+    for (let i = top.length - 1; i >= 0; i -= 1) zone._members.unshift(top[i]!);
+    for (const entity of bottom) zone._members.push(entity);
+    return before;
+  }
+
   #pull(entity: Entity, zone: Zone): void {
     const index = zone._members.indexOf(entity);
     if (index !== -1) zone._members.splice(index, 1);
+  }
+
+  /** Throws, before anything moves, if `zone` may not hold `entity` (see `ZoneDef.ownerOnly`). */
+  #admit(entity: Entity, zone: Zone): void {
+    if (zone.ownerOnly && zone.owner && entity.owner && entity.owner !== zone.owner) {
+      throw new Error(
+        `"${entity.name}" belongs to ${entity.owner.name}, so it cannot be put in ${zone.owner.name}'s ${zone.id} — ` +
+          `a ${zone.id} holds only its own player's cards`,
+      );
+    }
   }
 
   #place(entity: Entity, zone: Zone, position: ZonePosition): void {
@@ -408,9 +588,19 @@ export class ZoneRegistry {
         `Zone "${zone.key}" holds ${zone._members.length} of a maximum ${zone.capacity} — cannot add "${entity.name}"`,
       );
     }
-    if (!zone.ordered || position === 'bottom') zone._members.push(entity);
-    else if (position === 'top') zone._members.unshift(entity);
-    else zone._members.splice(Math.max(0, Math.min(position, zone._members.length)), 0, entity);
+    if (!zone.ordered) zone._members.push(entity);
+    else zone._members.splice(indexFor(position, zone._members.length), 0, entity);
     this.#of.set(entity, zone);
   }
+}
+
+/** The insertion index for `position` in an ordered zone currently holding `length`. */
+function indexFor(position: ZonePosition, length: number): number {
+  const clamp = (index: number): number => Math.max(0, Math.min(index, length));
+  if (position === 'top') return 0;
+  if (position === 'bottom') return length;
+  if (typeof position === 'number') return clamp(position);
+  // Ends up `nth` from the chosen end: from the bottom, that is `nth - 1`
+  // entities below it.
+  return clamp(position.from === 'top' ? position.nth - 1 : length - (position.nth - 1));
 }

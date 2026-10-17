@@ -32,6 +32,13 @@ export type MathExpression =
 
 export type MathContext = Readonly<Record<string, unknown>>;
 
+/**
+ * The names a formula can start a path with because the *language* provides them
+ * (`this.hp`, `count`, `roll.total`). Any other bare name in a formula is a
+ * variable the author stored with "Store … as <Name>."
+ */
+export const MATH_ROOTS: readonly string[] = ['this', 'subject', 'subjects', 'sources', 'count', 'roll', 'votes'];
+
 type MathToken = { kind: 'number' | 'word' | 'operator' | 'eof'; text: string };
 
 function tokenize(text: string): MathToken[] {
@@ -190,7 +197,20 @@ function resolvePath(context: MathContext, parts: readonly (string | number | { 
   return value;
 }
 
-export function evaluateMathExpression(expression: MathExpression, context: MathContext): number {
+/**
+ * Hooks into an evaluation. `step` is called once per node visited, which is how a
+ * caller meters the work: a `Σ` over a billion terms visits a billion nodes.
+ */
+export interface EvaluateHooks {
+  readonly step?: () => void;
+}
+
+export function evaluateMathExpression(
+  expression: MathExpression,
+  context: MathContext,
+  hooks?: EvaluateHooks,
+): number {
+  hooks?.step?.();
   switch (expression.kind) {
     case 'number': return expression.value;
     case 'path': {
@@ -198,24 +218,24 @@ export function evaluateMathExpression(expression: MathExpression, context: Math
       if (typeof value !== 'number') throw new Error(`math path does not resolve to a number: ${expression.parts.join('.')}`);
       return value;
     }
-    case 'unary': return expression.op === '-' ? -evaluateMathExpression(expression.expression, context) : evaluateMathExpression(expression.expression, context);
+    case 'unary': return expression.op === '-' ? -evaluateMathExpression(expression.expression, context, hooks) : evaluateMathExpression(expression.expression, context, hooks);
     case 'sumArray': {
-      const value = expression.expression.kind === 'path' ? resolvePath(context, expression.expression.parts, context) : evaluateMathExpression(expression.expression, context);
+      const value = expression.expression.kind === 'path' ? resolvePath(context, expression.expression.parts, context) : evaluateMathExpression(expression.expression, context, hooks);
       if (!Array.isArray(value)) throw new Error('Σ(...) expects an array or array property');
       return value.reduce((total, item) => total + (typeof item === 'number' ? item : 0), 0);
     }
     case 'sum': {
-      const start = Math.ceil(evaluateMathExpression(expression.start, context));
-      const end = Math.floor(evaluateMathExpression(expression.end, context));
+      const start = Math.ceil(evaluateMathExpression(expression.start, context, hooks));
+      const end = Math.floor(evaluateMathExpression(expression.end, context, hooks));
       let total = 0;
       for (let index = start; index <= end; index += 1) {
-        total += evaluateMathExpression(expression.expression, { ...context, [expression.variable]: index });
+        total += evaluateMathExpression(expression.expression, { ...context, [expression.variable]: index }, hooks);
       }
       return total;
     }
     case 'binary': {
-      const left = evaluateMathExpression(expression.left, context);
-      const right = evaluateMathExpression(expression.right, context);
+      const left = evaluateMathExpression(expression.left, context, hooks);
+      const right = evaluateMathExpression(expression.right, context, hooks);
       switch (expression.op) {
         case '+': return left + right;
         case '-': return left - right;

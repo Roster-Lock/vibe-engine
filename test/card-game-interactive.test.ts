@@ -71,7 +71,7 @@ describe('interactive card game', () => {
     expect(side.mana).toBe(1);
 
     const archer = side.hand.cards[0]!;
-    expect(archer.id).toBe('elven-archer');
+    expect(archer.printedId).toBe('elven-archer');
     const handBefore = side.hand.size;
     const enemyHero = game.sideOf(ai).hero;
     const hpBefore = enemyHero.gauge('hp').current;

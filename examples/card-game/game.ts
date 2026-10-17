@@ -25,7 +25,7 @@
  * and the answer is a `PriorityResponse`.
  *
  * A **permanent** resolves by arriving: the stack moves it to `active`, then
- * its `resolve` adds summoning sickness, moves it into `play` and fires its
+ * its `resolve` moves it into `play` (the standing rules, summoning sickness among them, apply as it arrives) and fires its
  * play-time effect. A **spell** resolves into `garbage`.
  *
  * ## Triggered abilities are respondable to as well
@@ -42,10 +42,14 @@
  * stack is non-empty. Attacks and the hero power are still immediate and
  * still not respondable; they are combat, not spells.
  */
+import { setEngineCast, setEngineCastable } from '../../src/games/cards/cast.js';
+import { setEngineCreate } from '../../src/games/cards/create.js';
+import { setEngineDraw } from '../../src/games/cards/draw.js';
 import {
   Game,
   GameEndInterrupt,
   GameEngine,
+  addBuff,
   setGauge,
   changeGaugeBy,
   type Action,
@@ -53,17 +57,19 @@ import {
   type Decision,
   type GameEvent,
   type Player,
+  type ZoneDef,
 } from '../../src/engine/index.js';
+import type { ZoneBinding } from '../../src/ir/index.js';
 import { createEngine } from '../../src/games/round-based/index.js';
-import { ACTIVE, CARD_ZONES, GARBAGE } from '../../src/games/cards/zones.js';
+import { ACTIVE, CARD_ZONES, DECK, GARBAGE, STOLEN } from '../../src/games/cards/zones.js';
 import {
   CardStack,
   type SpellObject,
   type StackDestination,
 } from '../../src/games/cards/stack.js';
-import type { TriggerScheduler } from '../../src/engine/index.js';
-import type { Card } from './cards.js';
-import type { CardObject } from './objects.js';
+import { chosenCharacters, type ManualAbility, type TriggerScheduler } from '../../src/engine/index.js';
+import type { Card, CreatureCard } from './cards.js';
+import { HAND_ABILITIES, PermanentCard, SpellCardObject, instantiate, type CardObject } from './objects.js';
 import type { CardPlayer } from './ai.js';
 import { ATTACK_PATTERN, attack, heroPower, manaCrystal, summoningSickness } from './combat.js';
 import { MAX_CRYSTALS, Side } from './side.js';
@@ -77,6 +83,17 @@ export type Move =
   | { readonly kind: 'play'; readonly card: CardObject; readonly targets: Character[] }
   | { readonly kind: 'attack'; readonly attacker: Character; readonly target: Character }
   | { readonly kind: 'hero-power'; readonly target: Character }
+  /**
+   * Use an ability a card has been **given** by its zone or an effect — a Boxed
+   * Present's *Open Present*. The card is not in hand (that is a `play`), and what
+   * it does is whatever the ability says, so it names the ability as well.
+   */
+  | {
+      readonly kind: 'use';
+      readonly card: CardObject;
+      readonly ability: ManualAbility;
+      readonly targets: Character[];
+    }
   | { readonly kind: 'end' };
 
 export interface CardGameOptions {
@@ -162,9 +179,17 @@ export class CardGame extends Game {
     this.cardStack = new CardStack(this.engine);
     stack = this.cardStack;
     this.rules = new GameRules(options.rules ?? CARD_RULES);
+    this.engine.addStateBasedRule({
+      name: 'Creatures arriving in play',
+      when: () => this.#newcomers().length > 0,
+      then: () => this.#noticeArrivals(),
+    });
 
     for (const player of players) {
       this.#sides.set(player, new Side(player, this.engine));
+      setEngineDraw(this.engine, (who, count) => this.sideOf(who).draw(count));
+      setEngineCast(this.engine, (who, card, options) => this.tryCast(who as CardPlayer, card as CardObject, options));
+      setEngineCastable(this.engine, (who) => this.castableCards(who as CardPlayer));
       // Priority is answered with a spell, so a player needs the game to
       // build the stack object — the same dependency `chooseMove` has.
       player.game = this;
@@ -201,7 +226,7 @@ export class CardGame extends Game {
       (creature) =>
         this.engine.isInPlay(creature) &&
         !side.attacked.has(creature) &&
-        !creature.hasStatus('summoning-sickness') &&
+        this.engine.canUse(creature, attack).usable &&
         (creature.stat('power') ?? 0) > 0,
     );
   }
@@ -246,6 +271,7 @@ export class CardGame extends Game {
       // The coin, simplified: the second player draws one more.
       await side.draw(this.#openingHand + (index === 0 ? 0 : 1));
     }
+    for (const binding of this.#zoneBindings) await binding.apply(this.engine);
   }
 
   /**
@@ -273,6 +299,79 @@ export class CardGame extends Game {
     return [];
   }
 
+  readonly #creatureDefinitions = new Map<string, CreatureCard>();
+  #madeCreatures = 0;
+
+  /**
+   * Adds the creature definitions a card document declares (`Creature Giant Golem 6/6`), so a
+   * card's `Create a Giant Golem.` can make them. A made creature is a new object each time, in play
+   * under its maker's control, and arrives like any other: it is noticed, and the entry rules apply.
+   */
+  installCreatures(definitions: readonly { readonly kind: string; readonly name: string }[]): void {
+    for (const definition of definitions) {
+      if (definition.kind === 'creature') this.#creatureDefinitions.set(definition.name.toLowerCase(), definition as CreatureCard);
+    }
+    setEngineCreate(this.engine, async (who, name) => {
+      const definition = this.#creatureDefinitions.get(name.toLowerCase());
+      if (!definition) throw new Error(`CardGame: there is no creature "${name}" to create`);
+      const player = who as CardPlayer;
+      const side = this.sideOf(player);
+      const made = instantiate(definition, player, side) as PermanentCard;
+      this.#madeCreatures += 1;
+      (made as { id: string }).id = `${definition.id}#made${this.#madeCreatures}`;
+      // Born in its maker's library and moved into play: a real arrival, with the rules that go with it.
+      this.engine.registerCharacter(made, { zone: DECK.id, owner: player });
+      await this.engine.moveTo(made, 'play', { source: side.hero });
+      return made;
+    });
+  }
+
+  readonly #zoneBindings: ZoneBinding[] = [];
+
+  /**
+   * Adds the zones a card document declares (`Zone Suspend (per-player, public)`) and the
+   * rules they keep. Call before `setup()` / `runLoop()`: the zones are declared now, their
+   * rules are applied at setup, and their `At the start of your turn, …` rules run each turn.
+   */
+  installZones(authored: { readonly zoneDefs: readonly ZoneDef[]; readonly zoneBindings: readonly ZoneBinding[] }): void {
+    for (const def of authored.zoneDefs) this.engine.zones.declare(def);
+    this.#zoneBindings.push(...authored.zoneBindings);
+  }
+
+  /** Creatures the game has already seen in play, so each arrival is noticed once. */
+  readonly #seenInPlay = new Set<Character>();
+
+  /** Creatures in play that the game has not noticed arriving yet. */
+  #newcomers(): PermanentCard[] {
+    return this.engine.registeredCharacters.filter(
+      (c): c is PermanentCard => c instanceof PermanentCard && this.engine.isInPlay(c) && !this.#seenInPlay.has(c),
+    );
+  }
+
+  /**
+   * A creature has arrived in play — **however** it got there: cast and resolved, cheated in
+   * from hand or the stack, revived from the garbage. It joins its controller's board and the
+   * `creature:enters` rules apply to it (summoning sickness, by default). Creatures that left
+   * play are forgotten, so coming back is a new arrival.
+   */
+  #noticeArrivals(): Action[] {
+    for (const seen of [...this.#seenInPlay]) if (!this.engine.isInPlay(seen)) this.#seenInPlay.delete(seen);
+    const actions: Action[] = [];
+    for (const creature of this.#newcomers()) {
+      this.#seenInPlay.add(creature);
+      const player = creature.controller as CardPlayer | undefined;
+      if (!player) continue;
+      const side = this.sideOf(player);
+      if (!side.board.includes(creature)) side.board.push(creature);
+      for (const rule of this.rules.at('creature:enters')) {
+        for (const action of rule.actions) {
+          if (action.kind === 'summoning-sickness') actions.push(addBuff(creature, summoningSickness, side.hero));
+        }
+      }
+    }
+    return actions;
+  }
+
   /**
    * Applies every rule that holds at `timing`, in order.
    *
@@ -281,6 +380,10 @@ export class CardGame extends Game {
    * variant or a test can run a timing itself.
    */
   async applyRules(timing: RuleTiming, turnOwner: Side): Promise<void> {
+    if (timing === 'turn:start') {
+      // Zones keep their own rules (`Zone Suspend: At the start of your turn, …`).
+      for (const binding of this.#zoneBindings) await binding.trigger('turn:start', this.engine, turnOwner.hero.controller);
+    }
     for (const rule of this.rules.at(timing)) {
       const sides =
         rule.affects === 'turn-owner' ? [turnOwner] : this.#order.map((player) => this.sideOf(player));
@@ -293,6 +396,8 @@ export class CardGame extends Game {
   /** Interprets one rule action. The only place the vocabulary is known. */
   async #applyRuleAction(side: Side, action: CardRuleAction, rule: CardRule): Promise<void> {
     switch (action.kind) {
+      case 'summoning-sickness':
+        return; // applied as a creature arrives (`#noticeArrivals`), not at a turn timing
       case 'gain-crystal':
         if (side.crystals >= MAX_CRYSTALS) return;
         side.crystals += 1;
@@ -323,6 +428,24 @@ export class CardGame extends Game {
     }
   }
 
+  /**
+   * Every ability a card has been given that `player` may use right now, with the
+   * card it is on — what a UI offers beside the hand. Cards in a hand are not
+   * listed unless something has given them an ability.
+   */
+  cardAbilities(player: CardPlayer): readonly { readonly card: CardObject; readonly ability: ManualAbility }[] {
+    const found: { card: CardObject; ability: ManualAbility }[] = [];
+    for (const entity of this.engine.zones.entities) {
+      if (!(entity instanceof PermanentCard || entity instanceof SpellCardObject)) continue;
+      for (const ability of this.engine.abilitiesFor(player, entity)) {
+        // A card's own `Suspend: …` is a hand ability: it is not offered from anywhere else.
+        if (HAND_ABILITIES.has(ability) && this.sideOf(player).hand.has(entity)) found.push({ card: entity, ability });
+        else if (!HAND_ABILITIES.has(ability)) found.push({ card: entity, ability });
+      }
+    }
+    return found;
+  }
+
   /** Main phase: ask the active player for moves until it passes. */
   async runGame(): Promise<void> {
     const player = this.activePlayer;
@@ -331,7 +454,9 @@ export class CardGame extends Game {
     for (let moves = 0; moves < MOVE_LIMIT; moves++) {
       const move = await player.chooseMove(this);
       if (move.kind === 'end') break;
-      await this.#execute(side, move);
+      // One move is one unit of work with a gas budget: a move that sets off a chain
+      // that never ends runs out, rather than hanging the game.
+      await this.engine.metered(`move ${move.kind}`, () => this.#execute(side, move));
       // An attack or a hero power can kill something; a kill triggers. Those
       // triggers wait on the stack for a window, and this is it.
       await this.settleTriggers();
@@ -357,6 +482,17 @@ export class CardGame extends Game {
         // buffs, death triggers and win/lose all come along for the ride.
         return this.engine.useAbility(move.attacker, attack, { targets: [move.target] });
       }
+      case 'use': {
+        const player = this.activePlayer;
+        const offered = this.cardAbilities(player).some((o) => o.card === move.card && o.ability === move.ability);
+        if (!offered) {
+          throw new Error(`CardGame: ${player.name} may not use ${move.ability.name} on that card`);
+        }
+        // The card may be face down, so the log names the pile, never the card.
+        const pile = this.engine.zones.zoneOf(move.card)?.id ?? 'the table';
+        this.#log(`  ✦  ${side.heroName} uses ${move.ability.name} on a card in ${pile}`);
+        return this.engine.useCardAbility(player, move.card, move.ability, { targets: move.targets });
+      }
       case 'hero-power': {
         this.#log(`  ✦  ${side.heroName} uses Fireblast on ${move.target.name}`);
         return this.engine.useAbility(side.hero, heroPower, { targets: [move.target] });
@@ -372,13 +508,67 @@ export class CardGame extends Game {
    * gets this far.
    */
   async #castCard(side: Side, card: CardObject, targets: Character[]): Promise<void> {
-    if (!side.hand.has(card)) throw new Error(`CardGame: ${card.name} is not in hand`);
-    if (card.cost > side.mana) throw new Error(`CardGame: not enough mana for ${card.name}`);
+    if (!this.castableCards(side.hero.controller as CardPlayer).includes(card)) {
+      throw new Error(`CardGame: ${card.name} is not in hand`);
+    }
+    await this.#cast(side, card, targets);
+  }
+
+  /**
+   * Every card `player` may cast from where it is: their hand, and any card of another
+   * player's they are holding in their `stolen` pile.
+   */
+  castableCards(player: CardPlayer): readonly CardObject[] {
+    const side = this.sideOf(player);
+    const stolen = this.engine.zones.zone(STOLEN.id, player)?.members ?? [];
+    return [...side.hand.cards, ...(stolen as readonly CardObject[])];
+  }
+
+  /**
+   * **Casts a card if it can be** — the game's answer to the language's *Cast this
+   * card if you can.* Used for a card that is not in hand: an ability a zone or an
+   * effect gave it (a Boxed Present's *Open Present*) sets the cast going, and this
+   * says whether it can go ahead.
+   *
+   * "Can" is what it would take from the hand: the cost is affordable and, if the
+   * card picks a target, there is a legal one. The caster chooses (their own
+   * `choose`, so a UI or AI answers). Nothing is done to a card that cannot be
+   * cast, which is what lets the ability fall back to something else. Casting puts
+   * the card on the stack, which is how it is revealed.
+   *
+   * Timing (sorcery speed) is not checked here: the ability that calls this is
+   * already being used at a legal moment.
+   */
+  async tryCast(player: CardPlayer, card: CardObject, options: { readonly free?: boolean } = {}): Promise<boolean> {
+    const side = this.sideOf(player);
+    if (!options.free && card.cost > side.mana) return false;
+    const pattern = card.kind === 'spell' ? card.targeting : card.onPlayTargeting;
+    let targets: Character[] = [];
+    if (pattern) {
+      const pool = this.engine.validTargets(pattern, side.hero);
+      if (pool.length === 0) return false;
+      const count = pattern.count ?? 1;
+      const answer = await player.choose({
+        kind: 'select',
+        prompt: `Choose a target for ${card.name}`,
+        chooser: player,
+        options: pool,
+        count,
+      });
+      targets = chosenCharacters(answer);
+    }
+    await this.#cast(side, card, targets, options.free === true);
+    return true;
+  }
+
+  /** Pays for a card and puts it on the stack, from wherever it is. */
+  async #cast(side: Side, card: CardObject, targets: Character[], free = false): Promise<void> {
+    if (!free && card.cost > side.mana) throw new Error(`CardGame: not enough mana for ${card.name}`);
 
     const at = targets.length > 0 ? ` → ${targets.map((t) => t.name).join(', ')}` : '';
     this.#log(`  ▸  ${side.heroName} casts ${card.name} (${card.cost})${at}`);
 
-    if (!(await this.chargeFor(card, this.activePlayer))) {
+    if (!free && !(await this.chargeFor(card, this.activePlayer))) {
       throw new Error(`CardGame: not enough mana for ${card.name}`);
     }
     const object = this.castObject(card, this.activePlayer, targets);
@@ -436,16 +626,15 @@ export class CardGame extends Game {
 
   /**
    * A permanent resolves by **arriving**. The stack has already moved the
-   * card to `active`; here it gains summoning sickness, moves into `play`
+   * card to `active`; here the `creature:enters` rules apply (summoning sickness, by default),
+   * it moves into `play`
    * (a real `active → play` transition, which is what `enters play from
    * active` answers) and fires its play-time effect.
    */
   async #arrive(side: Side, permanent: CardObject, targets: readonly Character[]): Promise<Action[]> {
     if (permanent.kind !== 'creature') return [];
-    if (!permanent.keywords?.includes('charge')) {
-      await this.engine.addBuff(permanent, summoningSickness, side.hero);
-    }
-    side.board.push(permanent);
+    // It joins the board, and the `creature:enters` rules (summoning sickness) apply, when the
+    // engine sees it in play — whichever way it arrived (see `#noticeArrivals`).
     await this.engine.moveTo(permanent, 'play', { source: side.hero });
 
     // The play-time arrival effect (a battlecry that picks a target) is fired

@@ -23,6 +23,8 @@ import {
   damage,
   destroy,
   discover,
+  markersFor,
+  move as moveEntity,
   heal,
   gaugeDelta,
   gaugeTransformCtx,
@@ -30,12 +32,17 @@ import {
   removeBuff,
   setGauge,
   type Ability,
+  type Entity,
+  type Zone,
   type AbilityContext,
   type Action,
   type AnyTriggeredAbility,
   type BuffDef,
   type GameEngine,
+  type ChoiceRequest,
   type GameEvent,
+  type Player,
+  type SealedRound,
   type ManualAbility,
   type PassiveActionModifier,
   type TargetPattern,
@@ -45,6 +52,9 @@ import {
 // `win`/`lose` are round-based game actions, not engine vocabulary.
 import { lose, win } from '../../games/round-based/index.js';
 import type {
+  CardSelectorIR,
+  CardSourceIR,
+  ZoneRefIR,
   AbilityIR,
   PredicateIR,
   ValueIR,
@@ -58,9 +68,14 @@ import type {
   TargetBindingIR,
   TargetingIR,
   TriggerIR,
+  ZoneSectionIR,
 } from '../ability.js';
 import { isAlly, isEnemy } from '../../games/round-based/index.js';
 import { isEntityEffect } from '../ability.js';
+import { validateRounds } from '../rounds.js';
+import { engineCast, engineCastable, type CastFn } from '../../games/cards/cast.js';
+import { engineCreate, type CreateFn } from '../../games/cards/create.js';
+import { createDraw, engineDraw, type DrawFn } from '../../games/cards/draw.js';
 import { evaluateMathExpression } from '../math-expression.js';
 
 export interface BindOptions {
@@ -83,10 +98,56 @@ export interface BindOptions {
    * a missing zone is the game's error, reported by the engine.
    */
   readonly aliases?: Readonly<Record<string, string>>;
+  /**
+   * Bind an ability whose choice rounds break the table procedure instead of
+   * throwing. For a caller that has already reported the problems as
+   * diagnostics (the English compiler) and still wants a document to preview.
+   * Defaults to `false`: a JSON document nobody checked is refused.
+   */
+  readonly allowUnsoundRounds?: boolean;
+  /**
+   * The game's `cast(player, card)`, for *Cast this card*. Without one the effect
+   * uses the one the game registered for its engine (`setEngineCast`), and fails
+   * if there is none — casting is the game's business, not the IR's.
+   */
+  readonly cast?: CastFn;
+  /**
+   * Finds an ability of the document being bound by its `id`. `bindDocument` fills
+   * it in with its own abilities (so "have Open Present" can name a sibling); a
+   * host may supply one for abilities that live elsewhere.
+   */
+  readonly resolveAbility?: (id: string) => ManualAbility | undefined;
+  /**
+   * The game's `draw(player, count)`, for the language's `Draw(you, 2).` Without
+   * one, a plain draw is used: cards move from the top of the aliased `library`
+   * to the aliased `hand`, with no limit and no penalty for an empty library.
+   */
+  readonly draw?: DrawFn;
+  /** The game's `create(player, creature)`, for the language's `Create a Giant Golem.` */
+  readonly create?: CreateFn;
+}
+
+/** A `Zone` section, bound: call `apply` once the game's zones and players exist. */
+export interface ZoneBinding {
+  /** The zone, as the document wrote it. */
+  readonly zone: string;
+  /**
+   * Runs the section for each instance of the zone — each player's, for a per-player
+   * zone — with that instance's owner as "you". Safe to call again: it sets the same
+   * state.
+   */
+  apply(engine: GameEngine): Promise<void>;
+  /**
+   * Runs the zone's standing rules for `event` (`At the start of your turn, …` is `turn:start`).
+   * A rule that says "your" runs only for the instance `turnOwner` owns.
+   */
+  trigger(event: string, engine: GameEngine, turnOwner: Player | undefined): Promise<void>;
 }
 
 export interface BindResult {
   readonly abilities: ManualAbility[];
+  /** One binding per `Zone` section, in document order. */
+  readonly zones: ZoneBinding[];
   readonly buffs: BuffDef[];
   /**
    * Game-scoped triggers (`at the start of turn, …`) — they belong to no
@@ -121,6 +182,90 @@ interface ResolveContext {
   readonly subject: Character | undefined;
   /** The ability's **named** picks, by binding name. */
   readonly bindings: ReadonlyMap<string, readonly Character[]>;
+  /**
+   * The choice rounds this resolution has opened, by name. Present only where an
+   * ability actually resolves (a cast or a trigger); a context built just to
+   * evaluate a predicate has none.
+   */
+  readonly rounds?: Map<string, RoundState>;
+  /** The most recent roll this resolution made; `rolled` values read it. */
+  readonly rolled?: { results: readonly number[] };
+  /** Values kept with `store`, by name; `variable` values read them. */
+  readonly variables?: Map<string, number>;
+  /** The card an ability a zone or effect gave it belongs to — "this card". */
+  readonly host?: Entity;
+  /** The zone instance a `Zone` section is being applied to — "this zone". */
+  readonly thisZone?: Zone;
+  /** Temporary piles this resolution made; they are cleared away when it ends. */
+  readonly temporary?: TemporaryZones;
+}
+
+/**
+ * Piles an effect makes for a moment (`the temporary zone Pool`, the two halves of a split).
+ * They are real zones while the ability resolves, and gone after it: whatever is still in
+ * one then goes to its owner's garbage.
+ */
+class TemporaryZones {
+  static #next = 1;
+  readonly zones = new Map<string, Zone>();
+  /** The outcome of the last contest played in this resolution (`the winners`, `the losers`). */
+  winners: Player[] = [];
+  losers: Player[] = [];
+  /** The opponent "target opponent" named the first time; later mentions are the same player. */
+  targetOpponent: Player | undefined;
+  /** The pile picked by the last `choosePile`, and the one not picked. */
+  chosen: string | undefined;
+  other: string | undefined;
+
+  /** The zone called `name` (`@chosen` / `@other` for the last choice), made on first use if `create`. */
+  resolve(ctx: { readonly engine: GameEngine }, name: string, create: boolean): Zone | undefined {
+    const real = name === '@chosen' ? this.chosen : name === '@other' ? this.other : name;
+    if (real === undefined) return undefined;
+    const existing = this.zones.get(real);
+    if (existing || !create) return existing;
+    const id = `temp:${TemporaryZones.#next++}:${real}`;
+    ctx.engine.zones.declare({ id, visibility: 'public' });
+    const made = ctx.engine.zones.zone(id)!;
+    this.zones.set(real, made);
+    return made;
+  }
+}
+
+/** Ends the piles: leftover cards go to their owners' garbage, then the zones are removed. */
+async function clearTemporary(ctx: ResolveContext, options: BindOptions): Promise<void> {
+  if (!ctx.temporary) return;
+  const garbage = options.aliases?.garbage ?? 'garbage';
+  for (const zone of ctx.temporary.zones.values()) {
+    for (const card of [...zone.members]) {
+      const owner = card.owner ?? ctx.self.controller;
+      await ctx.engine.moveTo(card, garbage, { ...(owner ? { owner } : {}), source: ctx.self, reason: 'temporary zone ended' });
+    }
+    ctx.engine.zones.undeclare(zone.id);
+  }
+  ctx.temporary.zones.clear();
+}
+
+/** A named choice round: the engine's sealed round, and whether it was secret. */
+interface RoundState {
+  readonly round: SealedRound;
+  readonly secret: boolean;
+  /** True for a vote — a round over labelled options, whose answers `votes` counts. */
+  readonly label: boolean;
+}
+
+/** The votes cast for each option in the most recent vote; empty when there is none. */
+function tallyOf(ctx: ResolveContext): Map<string, number> {
+  const counts = new Map<string, number>();
+  let latest: RoundState | undefined;
+  for (const state of ctx.rounds?.values() ?? []) if (state.label) latest = state;
+  if (!latest) return counts;
+  if (!latest.round.revealed) {
+    throw new Error('the votes are still sealed — reveal them before counting');
+  }
+  for (const { answer } of latest.round.answers) {
+    if (answer.kind === 'label') counts.set(answer.value, (counts.get(answer.value) ?? 0) + 1);
+  }
+  return counts;
 }
 
 /** The entities a triggering event bound, by role. */
@@ -170,10 +315,24 @@ function gaugeIdOf(
   return typeof selector === 'string' ? selector : character.lifeGauge;
 }
 
+/** What a roll came to: the total, or the highest / lowest die. Zero if nothing was rolled. */
+function rolledStat(results: readonly number[] | undefined, stat: 'total' | 'highest' | 'lowest'): number {
+  if (!results || results.length === 0) return 0;
+  if (stat === 'highest') return Math.max(...results);
+  if (stat === 'lowest') return Math.min(...results);
+  return results.reduce((sum, die) => sum + die, 0);
+}
+
 function valueOf(value: ValueIR, ctx: ResolveContext, options: BindOptions): number {
   switch (value.kind) {
     case 'const':
       return value.value;
+    case 'rolled':
+      return rolledStat(ctx.rolled?.results, value.stat);
+    case 'variable':
+      return ctx.variables?.get(value.name) ?? 0;
+    case 'votes':
+      return tallyOf(ctx).get(value.option) ?? 0;
     case 'count':
       return resolveQuery(value.query, ctx, options).length;
     case 'gauge': {
@@ -199,7 +358,17 @@ function valueOf(value: ValueIR, ctx: ResolveContext, options: BindOptions): num
         subjects: ctx.event.subjects.map(mathCharacterOf),
         sources: ctx.event.sources.map(mathCharacterOf),
         count: ctx.event.subjects.length,
-      });
+        // The latest roll, so a formula reads `roll.total` (English: "the total").
+        roll: {
+          total: rolledStat(ctx.rolled?.results, 'total'),
+          highest: rolledStat(ctx.rolled?.results, 'highest'),
+          lowest: rolledStat(ctx.rolled?.results, 'lowest'),
+        },
+        // `votes.Attack` — the latest vote's tally (empty before one is held).
+        votes: Object.fromEntries(ctx.rounds && [...ctx.rounds.values()].some((s) => s.label) ? tallyOf(ctx) : []),
+        // Stored values are plain names in a formula: `(AttackerRoll * 2)`.
+        ...Object.fromEntries(ctx.variables ?? []),
+      }, { step: () => ctx.engine.gas.spend('math') });
   }
 }
 
@@ -281,6 +450,9 @@ function predicateHolds(predicate: PredicateIR, ctx: ResolveContext, options: Bi
             playersAreEnemies(you, candidate.controller)
           );
         }
+        case 'winners':
+        case 'losers':
+          return candidate.controller !== undefined && (ctx.temporary?.[predicate.to] ?? []).includes(candidate.controller);
         case 'ally':
           return isAlly(ctx.self, candidate);
         case 'enemy':
@@ -298,7 +470,12 @@ function checkOf(predicate: PredicateIR, options: BindOptions): EntityCheck {
 /* ------------------------------- queries ------------------------------ */
 
 /** An `all …` query as an engine targeting pattern. */
-function patternOf(query: Extract<EntityQueryIR, { kind: 'all' }>, options: BindOptions): TargetPattern {
+function patternOf(
+  query: Extract<EntityQueryIR, { kind: 'all' }>,
+  options: BindOptions,
+  /** The resolution's scratch, so `owned by the winners` can read the last contest. */
+  temporary?: TemporaryZones,
+): TargetPattern {
   const who: TargetWho = query.who;
   if (!query.filter) return { who, count: 1 };
   const check = checkOf(query.filter, options);
@@ -307,7 +484,15 @@ function patternOf(query: Extract<EntityQueryIR, { kind: 'all' }>, options: Bind
     count: 1,
     match: (tctx, candidate) =>
       check(
-        { self: tctx.self, engine: tctx.engine, targeting: undefined, event: NO_EVENT, subject: undefined, bindings: NO_BINDINGS },
+        {
+          self: tctx.self,
+          engine: tctx.engine,
+          targeting: undefined,
+          event: NO_EVENT,
+          subject: undefined,
+          bindings: NO_BINDINGS,
+          ...(temporary ? { temporary } : {}),
+        },
         candidate,
       ),
   };
@@ -324,7 +509,7 @@ function resolveQuery(query: EntityQueryIR, ctx: ResolveContext, options: BindOp
     case 'event':
       return query.role === 'source' ? ctx.event.sources : ctx.event.subjects;
     case 'all': {
-      const pool = ctx.engine.validTargets(patternOf(query, options), ctx.self);
+      const pool = ctx.engine.validTargets(patternOf(query, options, ctx.temporary), ctx.self);
       return query.other ? pool.filter((c) => c !== ctx.self) : pool;
     }
   }
@@ -333,6 +518,7 @@ function resolveQuery(query: EntityQueryIR, ctx: ResolveContext, options: BindOp
 /* ------------------------------- effects ------------------------------ */
 
 function effectActions(effect: EffectIR, ctx: ResolveContext, options: BindOptions): Action[] {
+  ctx.engine.gas.spend('effect', effect.kind);
   if (effect.kind === 'result') {
     const action = effect.win ? win : lose;
     if (effect.players === 'you') {
@@ -341,6 +527,10 @@ function effectActions(effect: EffectIR, ctx: ResolveContext, options: BindOptio
     }
     return ctx.engine.players.map((player) => action(player, ctx.self));
   }
+
+  // Round effects ask players, so they run in `effectsAsync`; a pure action list
+  // has nothing to return for them.
+  if (isRoundEffect(effect)) return [];
 
   // Discover is an action rather than a loop here: `effectActions` is pure
   // (effect → actions), and this mechanic peeks, asks the player, and moves
@@ -451,6 +641,712 @@ export function skipFacts(
   return collect(predicate) && facts.size > 0 ? facts : undefined;
 }
 
+/* --------------------------- choice rounds ---------------------------- */
+
+/** Effects that ask players or open/read a round, and so cannot be a pure action list. */
+function isRoundEffect(
+  effect: EffectIR,
+): effect is Extract<
+  EffectIR,
+  { kind: 'choose' | 'reveal' | 'moveChosen' | 'roll' | 'store' | 'draw' | 'table' | 'revealCard' | 'castCard' | 'moveCard' | 'moveCards' | 'revealCards' | 'split' | 'choosePile' | 'removeCounters' | 'castCards' | 'play' | 'create' | 'scry' | 'zoneAbility' }
+> {
+  return (
+    effect.kind === 'zoneAbility' ||
+    effect.kind === 'revealCard' ||
+    effect.kind === 'castCard' ||
+    effect.kind === 'moveCard' ||
+    effect.kind === 'moveCards' ||
+    effect.kind === 'revealCards' ||
+    effect.kind === 'removeCounters' ||
+    effect.kind === 'play' ||
+    effect.kind === 'create' ||
+    effect.kind === 'castCards' ||
+    effect.kind === 'split' ||
+    effect.kind === 'choosePile' ||
+    effect.kind === 'scry' ||
+    effect.kind === 'table' ||
+    effect.kind === 'store' ||
+    effect.kind === 'draw' ||
+    effect.kind === 'choose' ||
+    effect.kind === 'reveal' ||
+    effect.kind === 'moveChosen' ||
+    effect.kind === 'roll'
+  );
+}
+
+/**
+ * The players a `choose` asks: the controller first, then **round the table** in
+ * seating order from them (so with seats A B C D and C casting: C, D, A, B).
+ */
+function choosersOf(who: 'you' | 'each' | 'opponents' | 'winners' | 'losers', ctx: ResolveContext): Player[] {
+  const you = ctx.self.controller;
+  const everyone = ctx.engine.players;
+  if (who === 'winners' || who === 'losers') return [...(ctx.temporary?.[who] ?? [])];
+  if (who === 'you') return you ? [you] : [];
+  if (who === 'opponents') return everyone.filter((player) => player !== you);
+  const at = you ? everyone.indexOf(you) : -1;
+  if (at < 0) return you ? [you, ...everyone.filter((player) => player !== you)] : [...everyone];
+  return [...everyone.slice(at), ...everyone.slice(0, at)];
+}
+
+/**
+ * The players of a `choose` in the order they answer.
+ *
+ * Only an open round of `each` player has an order to choose; a sealed round
+ * answers all at once and a `you` / `opponents` round has no seating to rotate.
+ * `caster-first` is `choosersOf`; the others rotate or reverse the engine's
+ * seating (`engine.players`). `random` rolls a die with one face per seat — a
+ * real roll through the pipeline, so a table rolls a real die and the roll is
+ * announced.
+ */
+async function votersOf(
+  effect: Extract<EffectIR, { kind: 'choose' }>,
+  ctx: ResolveContext,
+): Promise<Player[]> {
+  const order = effect.order ?? 'caster-first';
+  const base = choosersOf(effect.players, ctx);
+  if (effect.secret || effect.players !== 'each' || order === 'caster-first') return base;
+  const seats = ctx.engine.players;
+  const rotate = (start: number): Player[] => [...seats.slice(start), ...seats.slice(0, start)];
+  if (order === 'reverse') return [...seats].reverse();
+  const caster = ctx.self.controller;
+  const at = Math.max(0, caster ? seats.indexOf(caster) : 0);
+  if (order === 'caster-last') return rotate((at + 1) % seats.length);
+  // A single seat has nothing to roll for.
+  if (seats.length < 2) return [...seats];
+  const [roll] = await ctx.engine.roll(1, seats.length, { source: ctx.self, reason: 'who votes first' });
+  return rotate((roll! - 1) % seats.length);
+}
+
+function roundOf(name: string, ctx: ResolveContext): RoundState {
+  const state = ctx.rounds?.get(name);
+  if (!state) throw new Error(`choice round "${name}" has not been opened`);
+  return state;
+}
+
+/**
+ * `Scry(player, X)`: the player looks at the top X cards of their library, chooses any
+ * number to put on the bottom, and then the order the rest go back on top. Only they see
+ * the cards, and only for as long as it takes.
+ */
+async function scry(
+  player: Player,
+  count: number,
+  ctx: ResolveContext,
+  libraryRole: string,
+  prompt: string,
+  /** Where the cards not kept on top go: the bottom of the library (scry), or this zone (surveil). */
+  discardTo?: string,
+): Promise<void> {
+  const library = ctx.engine.zones.zone(libraryRole, player);
+  if (!library) throw new Error(`"${prompt}": ${player.name} has no ${libraryRole} to scry`);
+  const section = library.section(count);
+  if (section.length === 0) return;
+  const looks = section.map((card) => ctx.engine.showTo(card, [player], { until: 'manual', source: ctx.self }));
+  try {
+    const down = await ctx.engine.ask({
+      kind: 'select',
+      prompt: `${prompt}: choose any number of cards to put ${discardTo ? 'in your garbage' : 'on the bottom'}`,
+      chooser: player,
+      options: section,
+      count: [0, section.length],
+      source: ctx.self,
+    });
+    const bottom = down.kind === 'select' ? [...down.chosen] : [];
+    // The rest go back on top; the player names the top card, then the next, and so on.
+    const rest = section.filter((card) => !bottom.includes(card));
+    const top: Entity[] = [];
+    while (rest.length > 1) {
+      const next = await ctx.engine.ask({
+        kind: 'select',
+        prompt: `${prompt}: choose the next card to put on top`,
+        chooser: player,
+        options: rest,
+        count: 1,
+        source: ctx.self,
+      });
+      const picked = next.kind === 'select' ? next.chosen[0] : undefined;
+      const card = picked && rest.includes(picked) ? picked : rest[0]!;
+      rest.splice(rest.indexOf(card), 1);
+      top.push(card);
+    }
+    top.push(...rest);
+    if (discardTo) {
+      // Surveil: the discards leave first; what is left of the section goes back on top in order.
+      for (const card of bottom) await ctx.engine.moveTo(card, discardTo, { owner: player, source: ctx.self, reason: prompt });
+      ctx.engine.arrange(library.id, top.length, { top }, { owner: player });
+    } else {
+      ctx.engine.arrange(library.id, section.length, { top, bottom }, { owner: player });
+    }
+  } finally {
+    for (const look of looks) look.end();
+  }
+}
+
+/** The players a zone reference names ("target opponent" asks the controller when there are several). */
+async function playersOf(
+  whose: ZoneRefIR['whose'],
+  ctx: ResolveContext,
+  prompt: string,
+): Promise<(Player | undefined)[]> {
+  const controller = ctx.self.controller;
+  switch (whose) {
+    case 'shared':
+    case 'temporary':
+    case 'this':
+      return [undefined];
+    case 'owner':
+      return [];
+    case 'you':
+      return controller ? [controller] : [];
+    case 'each':
+      return choosersOf('each', ctx);
+    case 'opponents':
+      return choosersOf('opponents', ctx);
+    case 'opponent': {
+      const others = choosersOf('opponents', ctx);
+      if (others.length <= 1) return others;
+      // "Target opponent" is chosen once: every later mention in the same resolution is the same player.
+      if (ctx.temporary?.targetOpponent && others.includes(ctx.temporary.targetOpponent)) return [ctx.temporary.targetOpponent];
+      const answer = await ctx.engine.ask({
+        kind: 'label',
+        prompt,
+        chooser: controller,
+        options: others.map((player) => player.name),
+      });
+      const picked = (answer.kind === 'label' ? others.find((player) => player.name === answer.value) : undefined) ?? others[0]!;
+      if (ctx.temporary) ctx.temporary.targetOpponent = picked;
+      return [picked];
+    }
+  }
+}
+
+/** One place cards are taken from: a zone (with its owner), or everything a player can cast. */
+interface CardGroup {
+  readonly members: readonly Entity[];
+  /** Whose zone it is — where "its owner's" sends them, unless the cards say otherwise. */
+  readonly owner: Player | undefined;
+  /** The player this group belongs to, to pair with "each opponent's … to each opponent's …". */
+  readonly player: Player | undefined;
+}
+
+async function groupsOf(
+  from: CardSourceIR,
+  ctx: ResolveContext,
+  zone: (role: string) => string,
+  prompt: string,
+): Promise<CardGroup[]> {
+  if ('castableBy' in from) {
+    const castable = engineCastable(ctx.engine);
+    if (!castable) throw new Error(`"${prompt}": this game has no cards that can be cast`);
+    const players = await playersOf(from.castableBy, ctx, prompt);
+    return players.map((player) => ({ members: player ? castable(player) : [], owner: undefined, player }));
+  }
+  if (from.whose === 'this') {
+    if (!ctx.thisZone) throw new Error(`"${prompt}": "this zone" needs a Zone section to be about`);
+    return [{ members: ctx.thisZone.members, owner: ctx.thisZone.owner, player: ctx.thisZone.owner }];
+  }
+  if (from.whose === 'temporary') {
+    const pile = ctx.temporary?.resolve(ctx, from.zone, false);
+    if (!pile) throw new Error(`"${prompt}": there is no temporary zone "${from.zone}" yet — move cards into it first`);
+    return [{ members: pile.members, owner: undefined, player: undefined }];
+  }
+  const groups: CardGroup[] = [];
+  for (const player of await playersOf(from.whose, ctx, prompt)) {
+    const source = ctx.engine.zones.zone(zone(from.zone), player);
+    if (!source) throw new Error(`"${prompt}": there is no zone "${from.zone}" to take cards from`);
+    groups.push({ members: source.members, owner: source.owner, player });
+  }
+  return groups;
+}
+
+/**
+ * `Move <cards> from <zone> to <zone>.` — the cards each source gives up, and the moves
+ * that put them where they go.
+ *
+ * Which players' zones: `you`, an `opponent` (the only one, or the one the controller
+ * names), every `opponents`, or `each` player; `shared` is a zone nobody owns; or the
+ * cards a player could cast. The destination is one zone, or `owner` (each card back to
+ * its own owner's — the card's, when it says whose it is, else the zone's), or — when both
+ * ends say the same many-player thing ("each opponent's … to each opponent's …") — the
+ * same player's.
+ */
+async function moveCardsActions(
+  effect: Extract<EffectIR, { kind: 'moveCards' }>,
+  ctx: ResolveContext,
+  zone: (role: string) => string,
+  prompt: string,
+): Promise<Action[]> {
+  const fromWhose = 'castableBy' in effect.from ? effect.from.castableBy : effect.from.whose;
+  // Who a destination zone belongs to: its owner's (the card's), the same many-player
+  // thing as the source (each opponent's … to each opponent's …), or one named player.
+  const named = new Map<string, Player | undefined>();
+  for (const ref of [effect.to, ...(effect.rest ? [effect.rest.to] : [])]) {
+    const many = (ref.whose === 'each' || ref.whose === 'opponents') && ref.whose === fromWhose;
+    if (ref.whose === 'owner' || ref.whose === 'shared' || ref.whose === 'temporary' || ref.whose === 'this' || many || named.has(ref.whose)) continue;
+    const players = await playersOf(ref.whose, ctx, prompt);
+    if (players.length !== 1) {
+      throw new Error(`"${prompt}": "${ref.whose}" names more than one place for the cards to go — name one zone`);
+    }
+    named.set(ref.whose, players[0]);
+  }
+
+  const controller = ctx.self.controller;
+  const actions: Action[] = [];
+  for (const group of await groupsOf(effect.from, ctx, zone, prompt)) {
+    // `any number of …` names a pool and lets the controller pick from it; otherwise the
+    // selector itself says which cards.
+    const poolSelect: CardSelectorIR = effect.select.any
+      ? { ...effect.select, how: effect.select.how === 'choose' ? 'all' : effect.select.how, any: undefined as never }
+      : effect.select;
+    const pool = await takeCards(poolSelect, group.members, ctx, prompt);
+    if (pool.length === 0) continue;
+
+    let picked: Entity[] = pool;
+    let rest: Entity[] = [];
+    const looks = effect.select.any && controller ? pool.map((card) => ctx.engine.showTo(card, [controller], { until: 'manual', source: ctx.self })) : [];
+    try {
+      if (effect.select.any) {
+        const answer = await ctx.engine.ask({
+          kind: 'select',
+          prompt: `${prompt}: choose any number of cards`,
+          chooser: controller,
+          options: pool,
+          count: [0, pool.length],
+          source: ctx.self,
+        });
+        picked = answer.kind === 'select' ? pool.filter((card) => answer.chosen.includes(card)) : [];
+        rest = pool.filter((card) => !picked.includes(card));
+      }
+      if (effect.order === 'chosen') picked = await chooseOrder(picked, controller, ctx, prompt);
+      if (effect.rest?.order === 'chosen') rest = await chooseOrder(rest, controller, ctx, prompt);
+    } finally {
+      for (const look of looks) look.end();
+    }
+
+    const destination = (ref: ZoneRefIR, card: Entity): Zone => {
+      if (ref.whose === 'this') {
+        if (!ctx.thisZone) throw new Error(`"${prompt}": "this zone" needs a Zone section to be about`);
+        return ctx.thisZone;
+      }
+      if (ref.whose === 'temporary') {
+        const pile = ctx.temporary?.resolve(ctx, ref.zone, true);
+        if (!pile) throw new Error(`"${prompt}": there is no pile "${ref.zone}" to move cards to`);
+        return pile;
+      }
+      const many = (ref.whose === 'each' || ref.whose === 'opponents') && ref.whose === fromWhose;
+      const owner =
+        ref.whose === 'owner' ? (card.owner ?? group.owner) : ref.whose === 'shared' ? undefined : many ? group.player : named.get(ref.whose);
+      const to = ctx.engine.zones.zone(zone(ref.zone), owner);
+      if (!to) throw new Error(`"${prompt}": there is no zone "${ref.zone}" to move cards to`);
+      return to;
+    };
+    const placements: { card: Entity; to: Zone; position?: 'top' | 'bottom' }[] = [
+      ...picked.map((card) => ({ card, to: destination(effect.to, card), ...(effect.to.position ? { position: effect.to.position } : {}) })),
+      ...(effect.rest ? rest.map((card) => ({ card, to: destination(effect.rest!.to, card), ...(effect.rest!.to.position ? { position: effect.rest!.to.position } : {}) })) : []),
+    ];
+
+    // Cards put back in the zone they came from are re-arranged in place (a move to the zone
+    // it is already in is no move); the section must be exactly the pool.
+    const home = ctx.engine.zones.zoneOf(pool[0]!);
+    const stay = placements.filter((p) => p.to === home);
+    const leave = placements.filter((p) => p.to !== home);
+    if (stay.length > 0 && home) {
+      const unplaced = pool.filter((card) => !placements.some((p) => p.card === card));
+      const top = [...unplaced, ...stay.filter((p) => p.position !== 'bottom').map((p) => p.card)];
+      const bottom = stay.filter((p) => p.position === 'bottom').map((p) => p.card);
+      const end = effect.select.how === 'bottom' ? 'bottom' : 'top';
+      if (leave.length > 0) throw new Error(`"${prompt}": cards cannot both stay in and leave ${home.id} in one move`);
+      ctx.engine.arrange(home.id, pool.length, { top, bottom }, { owner: home.owner, from: end });
+      continue;
+    }
+    // Cards going on top of a zone are placed last-first so the first listed ends up on top.
+    const onTop = leave.filter((p) => p.position === 'top').reverse();
+    const others = leave.filter((p) => p.position !== 'top');
+    for (const p of [...others, ...onTop]) {
+      actions.push(moveEntity(p.card, p.to, { source: ctx.self, ...(p.position ? { position: p.position } : {}) }));
+    }
+  }
+  return actions;
+}
+
+/** Asks the controller to put `cards` in order, first the one that goes first (on top). */
+async function chooseOrder(cards: readonly Entity[], chooser: Player | undefined, ctx: ResolveContext, prompt: string): Promise<Entity[]> {
+  const left = [...cards];
+  const ordered: Entity[] = [];
+  while (left.length > 1) {
+    const answer = await ctx.engine.ask({
+      kind: 'select',
+      prompt: `${prompt}: choose the next card`,
+      chooser,
+      options: left,
+      count: 1,
+      source: ctx.self,
+    });
+    const picked = answer.kind === 'select' ? answer.chosen[0] : undefined;
+    const card = picked && left.includes(picked) ? picked : left[0]!;
+    left.splice(left.indexOf(card), 1);
+    ordered.push(card);
+  }
+  return [...ordered, ...left];
+}
+
+/** `Reveal all cards castable by target opponent.` — every player may see them. */
+async function revealCards(
+  effect: Extract<EffectIR, { kind: 'revealCards' }>,
+  ctx: ResolveContext,
+  zone: (role: string) => string,
+  prompt: string,
+): Promise<void> {
+  for (const group of await groupsOf(effect.from, ctx, zone, prompt)) {
+    for (const card of await takeCards(effect.select, group.members, ctx, prompt)) {
+      ctx.engine.showTo(card, ctx.engine.players, { source: ctx.self });
+    }
+  }
+}
+
+/** The cards a selector takes from a zone's members (in the zone's order, top first). */
+async function takeCards(
+  select: CardSelectorIR,
+  members: readonly Entity[],
+  ctx: ResolveContext,
+  prompt: string,
+): Promise<Entity[]> {
+  const matching = members.filter(
+    (card) =>
+      // An ability waiting on the stack is not a card.
+      card.type !== 'ability' &&
+      (select.counters !== 'none' || ctx.engine.countersOn(card).size === 0) &&
+      (select.cardKind === undefined || (select.cardKind === 'creature') === (card.type === 'character')),
+  );
+  switch (select.how) {
+    case 'all':
+      return [...matching];
+    case 'top':
+      return matching.slice(0, select.count);
+    case 'bottom':
+      return matching.slice(Math.max(0, matching.length - select.count));
+    case 'random': {
+      const pool = [...matching];
+      const taken: Entity[] = [];
+      while (taken.length < select.count && pool.length > 0) {
+        taken.push(pool.splice(Math.floor(ctx.engine.random() * pool.length), 1)[0]!);
+      }
+      return taken;
+    }
+    case 'choose': {
+      const count = Math.min(select.count, matching.length);
+      if (count === 0) return [];
+      const answer = await ctx.engine.ask({
+        kind: 'select',
+        prompt,
+        chooser: ctx.self.controller,
+        options: matching,
+        count,
+        source: ctx.self,
+      });
+      return answer.kind === 'select' ? [...answer.chosen] : [];
+    }
+  }
+}
+
+/**
+ * Runs one round effect. `choose` and `reveal` act on the engine directly and
+ * return no actions; `moveChosen` returns the moves for the caller to apply.
+ */
+async function roundEffectActions(
+  effect: EffectIR,
+  ctx: ResolveContext,
+  options: BindOptions,
+  prompt: string,
+  apply?: (actions: Action[]) => Promise<void>,
+): Promise<Action[]> {
+  const zone = (role: string): string => options.aliases?.[role] ?? role;
+  ctx.engine.gas.spend('effect', effect.kind);
+  if (effect.kind === 'table') {
+    if (!apply) throw new Error(`"${prompt}": a table of results cannot run outside a resolving ability`);
+    // Read once. The first row that holds the result wins; `otherwise` is the
+    // fallback; no row at all means the result simply does nothing.
+    const result = valueOf(effect.on, ctx, options);
+    const row =
+      effect.rows.find((r) => !r.otherwise && result >= r.min && (r.max === null || result <= r.max)) ??
+      effect.rows.find((r) => r.otherwise);
+    for (const step of row?.steps ?? []) {
+      const actions = await stepActionsAsync(step, ctx, options, prompt, apply);
+      if (actions.length > 0) await apply(actions);
+    }
+    return [];
+  }
+  if (effect.kind === 'zoneAbility') {
+    const ability = options.resolveAbility?.(effect.ability);
+    if (!ability) throw new Error(`"${prompt}": there is no ability called "${effect.ability}" to give`);
+    if (effect.owners === 'this') {
+      const here = ctx.thisZone;
+      if (!here) throw new Error(`"${prompt}": "this zone" needs a Zone section to be about`);
+      // A shared zone has no owner, so "you" and "each opponent" would mean nobody.
+      if (!here.owner && effect.users !== 'each') {
+        throw new Error(
+          `"${prompt}": the "${here.id}" zone is shared, so it has no owner — say "for each player"`,
+        );
+      }
+      if (effect.remove) ctx.engine.removeZoneAbility(here, ability);
+      else ctx.engine.addZoneAbility(here, ability, choosersOf(effect.users, ctx));
+      return [];
+    }
+    const users = choosersOf(effect.users, ctx);
+    const owners = effect.owners === 'shared' ? undefined : choosersOf(effect.owners, ctx);
+    const zones = owners
+      ? owners.map((owner) => ctx.engine.zones.zone(zone(effect.zone), owner))
+      : [ctx.engine.zones.zone(zone(effect.zone))];
+    if (zones.some((z) => !z)) throw new Error(`"${prompt}": there is no zone "${effect.zone}" to give an ability to`);
+    for (const target of zones) {
+      if (effect.remove) ctx.engine.removeZoneAbility(target!, ability);
+      else ctx.engine.addZoneAbility(target!, ability, users);
+    }
+    return [];
+  }
+  if (effect.kind === 'revealCard' || effect.kind === 'castCard' || effect.kind === 'moveCard') {
+    const host = ctx.host;
+    if (!host) {
+      throw new Error(`"${prompt}": "this card" needs an ability a zone or an effect gave a card — this one belongs to a character`);
+    }
+    // The owner of the pile the card is in: where "its owner's garbage" is.
+    const owner = ctx.engine.zones.zoneOf(host)?.owner;
+    const moveHome = async (role: string): Promise<void> => {
+      await ctx.engine.moveTo(host, zone(role), { ...(owner ? { owner } : {}), source: ctx.self, reason: prompt });
+    };
+    if (effect.kind === 'revealCard') {
+      // Everyone sees it for as long as it stays where it is; casting it puts it
+      // on the (public) stack, which is a move.
+      ctx.engine.showTo(host, ctx.engine.players, { source: ctx.self });
+    } else if (effect.kind === 'moveCard') {
+      await moveHome(effect.to);
+      if (effect.counters) ctx.engine.addCounters(host, effect.counters.count, effect.counters.kind);
+    } else {
+      const player = ctx.self.controller;
+      if (!player) throw new Error(`"${prompt}": a card is cast by a player, and this ability has none`);
+      const cast = options.cast ?? engineCast(ctx.engine);
+      if (!cast) throw new Error(`"${prompt}": this game has no way to cast a card`);
+      const cast_ = await cast(player, host);
+      if (!cast_ && effect.otherwise !== undefined) await moveHome(effect.otherwise);
+    }
+    return [];
+  }
+  if (effect.kind === 'create') {
+    const create = options.create ?? engineCreate(ctx.engine);
+    if (!create) throw new Error(`"${prompt}": this game has no way to create a creature`);
+    for (const player of choosersOf(effect.players, ctx)) await create(player, effect.creature);
+    return [];
+  }
+  if (effect.kind === 'play') {
+    if (!ctx.rounds) throw new Error(`"${prompt}": a contest cannot be played outside a resolving ability`);
+    const { contest } = effect;
+    // The list of players the contest receives: "player 1" is the first of them.
+    const controller = ctx.self.controller;
+    const players: Player[] =
+      effect.players === 'you-and-opponent'
+        ? [...(controller ? [controller] : []), ...((await playersOf('opponent', ctx, prompt)) as Player[])]
+        : choosersOf(effect.players, ctx);
+    if (contest.playerCount !== undefined && players.length !== contest.playerCount) {
+      throw new Error(`"${prompt}": ${contest.name} needs ${contest.playerCount} players, but ${players.length} were named`);
+    }
+    // Everyone commits an option face down, then they are turned over together.
+    const round = await ctx.engine.askAll(
+      players.map((player): ChoiceRequest => ({ kind: 'label', prompt, chooser: player, options: [...contest.options] })),
+      { sealed: true },
+    );
+    ctx.rounds.set('contest', { round, secret: true, label: true });
+    // A commitment that is invalid or changed loses the game for that player.
+    const forfeited = await ctx.engine.revealRound(round);
+    const chosen = new Map<Player, string>();
+    for (const { player, answer } of round.answers) if (answer.kind === 'label') chosen.set(player, answer.value);
+    const picks = players.map((player) => chosen.get(player));
+    let winners: readonly number[] = [];
+    let losers: readonly number[] = [];
+    if (picks.every((pick) => pick !== undefined)) {
+      for (const rule of contest.rules) {
+        if (rule.kind === 'tie') {
+          if (picks.every((pick) => pick === picks[0])) break;
+        } else if (rule.kind === 'when') {
+          if (rule.picks.every((pick) => picks[pick.player - 1] === pick.option)) {
+            ({ winners, losers } = rule);
+            break;
+          }
+        } else {
+          ({ winners, losers } = rule);
+          break;
+        }
+      }
+    }
+    if (ctx.temporary) {
+      ctx.temporary.winners = winners.map((n) => players[n - 1]).filter((p): p is Player => p !== undefined);
+      ctx.temporary.losers = losers.map((n) => players[n - 1]).filter((p): p is Player => p !== undefined);
+    }
+    return forfeited.map(({ player }) => lose(player, ctx.self));
+  }
+  if (effect.kind === 'removeCounters') {
+    for (const group of await groupsOf(effect.from, ctx, zone, prompt)) {
+      for (const card of await takeCards(effect.select, group.members, ctx, prompt)) {
+        ctx.engine.removeCounters(card, effect.count, effect.counterKind);
+      }
+    }
+    return [];
+  }
+  if (effect.kind === 'castCards') {
+    const cast = options.cast ?? engineCast(ctx.engine);
+    if (!cast) throw new Error(`"${prompt}": this game has no way to cast a card`);
+    for (const group of await groupsOf(effect.from, ctx, zone, prompt)) {
+      const caster = group.owner ?? ctx.self.controller;
+      if (!caster) throw new Error(`"${prompt}": a card is cast by a player, and nobody owns this zone`);
+      for (const card of await takeCards(effect.select, group.members, ctx, prompt)) {
+        await cast(caster, card, effect.free ? { free: true } : undefined);
+      }
+    }
+    return [];
+  }
+  if (effect.kind === 'split') {
+    const pool = ctx.temporary?.resolve(ctx, effect.from.zone, false);
+    if (!pool) throw new Error(`"${prompt}": there is no temporary zone "${effect.from.zone}" to separate`);
+    const chooser = effect.chooser === 'you' ? ctx.self.controller : (await playersOf('opponent', ctx, prompt))[0];
+    const first = ctx.temporary!.resolve(ctx, effect.into[0], true)!;
+    const second = ctx.temporary!.resolve(ctx, effect.into[1], true)!;
+    const cards = [...pool.members];
+    const looks = chooser ? cards.map((card) => ctx.engine.showTo(card, [chooser], { until: 'manual', source: ctx.self })) : [];
+    const answer = await ctx.engine.ask({
+      kind: 'select',
+      prompt: `${prompt}: choose the cards for ${effect.into[0]} (the rest are ${effect.into[1]})`,
+      chooser,
+      options: cards,
+      count: [0, cards.length],
+      source: ctx.self,
+    }).finally(() => looks.forEach((look) => look.end()));
+    const firstCards = answer.kind === 'select' ? cards.filter((card) => answer.chosen.includes(card)) : [];
+    for (const card of cards) await ctx.engine.moveTo(card, firstCards.includes(card) ? first.id : second.id, { source: ctx.self, reason: prompt });
+    return [];
+  }
+  if (effect.kind === 'choosePile') {
+    const answer = await ctx.engine.ask({ kind: 'label', prompt, chooser: ctx.self.controller, options: [...effect.options] });
+    const picked = answer.kind === 'label' && effect.options.includes(answer.value) ? answer.value : effect.options[0];
+    if (!ctx.temporary) throw new Error(`"${prompt}": a pile cannot be chosen outside a resolving ability`);
+    ctx.temporary.chosen = picked;
+    ctx.temporary.other = effect.options[0] === picked ? effect.options[1] : effect.options[0];
+    return [];
+  }
+  if (effect.kind === 'revealCards') {
+    await revealCards(effect, ctx, zone, prompt);
+    return [];
+  }
+  if (effect.kind === 'moveCards') {
+    const actions = await moveCardsActions(effect, ctx, zone, prompt);
+    if (apply) {
+      // Applied now, so a later sentence ("Draw …") sees the cards where they went.
+      if (actions.length > 0) await apply(actions);
+      return [];
+    }
+    return actions;
+  }
+  if (effect.kind === 'store') {
+    if (!ctx.variables) throw new Error(`"${prompt}": a value cannot be stored outside a resolving ability`);
+    ctx.variables.set(effect.name, valueOf(effect.value, ctx, options));
+    return [];
+  }
+  if (effect.kind === 'draw') {
+    const count = Math.floor(valueOf(effect.count, ctx, options));
+    // The host's, else the one this engine's game registered, else a plain draw.
+    const draw =
+      options.draw ??
+      engineDraw(ctx.engine) ??
+      createDraw(ctx.engine, { library: zone('library'), hand: zone('hand') });
+    for (const player of choosersOf(effect.players, ctx)) await draw(player, count);
+    return [];
+  }
+  if (effect.kind === 'scry') {
+    const count = Math.floor(valueOf(effect.count, ctx, options));
+    for (const player of choosersOf(effect.players, ctx)) await scry(player, count, ctx, zone('library'), prompt, effect.surveil ? zone('garbage') : undefined);
+    return [];
+  }
+  if (effect.kind === 'roll') {
+    if (!ctx.rolled) throw new Error(`"${prompt}": dice cannot be rolled outside a resolving ability`);
+    const count = Math.floor(valueOf(effect.count, ctx, options));
+    const sides = Math.floor(valueOf(effect.sides, ctx, options));
+    // Through the pipeline, so a modifier may change the dice or the outcome.
+    ctx.rolled.results = await ctx.engine.roll(count, sides, { source: ctx.self, reason: prompt });
+    return [];
+  }
+  if (effect.kind === 'choose') {
+    if (!ctx.rounds) throw new Error(`"${prompt}": a choice cannot be asked outside a resolving ability`);
+    const requests: ChoiceRequest[] = [];
+    for (const player of await votersOf(effect, ctx)) {
+      if (effect.pick.kind === 'label') {
+        requests.push({ kind: 'label', prompt, chooser: player, options: effect.pick.options });
+      } else if (effect.pick.kind === 'card') {
+        // A player with nothing to choose from is not in the round: they are
+        // neither waited on nor moved.
+        const options_ = ctx.engine.zones.zone(zone(effect.pick.from), player)?.members ?? [];
+        if (options_.length === 0) continue;
+        requests.push({
+          kind: 'select',
+          prompt,
+          chooser: player,
+          options: options_,
+          count: 1,
+          source: ctx.self,
+          markers: markersFor(options_),
+        });
+      } else {
+        const min = Math.floor(valueOf(effect.pick.min, ctx, options));
+        const max = Math.floor(valueOf(effect.pick.max, ctx, options));
+        requests.push({ kind: 'number', prompt, chooser: player, min, max });
+      }
+    }
+    const round = await ctx.engine.askAll(requests, { sealed: effect.secret });
+    ctx.rounds.set(effect.round, { round, secret: effect.secret, label: effect.pick.kind === 'label' });
+    return [];
+  }
+  if (effect.kind === 'reveal') {
+    const state = roundOf(effect.round, ctx);
+    if (state.round.revealed) return [];
+    // A commitment must be a valid option, placed face down and left alone. One
+    // that is vague or invalid, or was changed, loses the game for its player.
+    const forfeited = await ctx.engine.revealRound(state.round);
+    return forfeited.map(({ player }) => lose(player, ctx.self));
+  }
+  if (effect.kind === 'moveChosen') {
+    const state = roundOf(effect.round, ctx);
+    if (!state.round.revealed) {
+      throw new Error(`"${prompt}": the choices in "${effect.round}" are still sealed — reveal them first`);
+    }
+    const actions: Action[] = [];
+    for (const { player, answer } of state.round.answers) {
+      if (answer.kind !== 'select') continue;
+      const destination = ctx.engine.zones.zone(zone(effect.to), player);
+      if (!destination) continue;
+      for (const entity of answer.chosen) actions.push(moveEntity(entity, destination, { source: ctx.self }));
+    }
+    return actions;
+  }
+  return [];
+}
+
+/** A step's effects as actions, running any round effects (which may ask) in order. */
+async function effectsAsync(
+  effects: readonly EffectIR[],
+  ctx: ResolveContext,
+  options: BindOptions,
+  prompt: string,
+  apply?: (actions: Action[]) => Promise<void>,
+): Promise<Action[]> {
+  const actions: Action[] = [];
+  for (const effect of effects) {
+    actions.push(
+      ...(isRoundEffect(effect)
+        ? await roundEffectActions(effect, ctx, options, prompt, apply)
+        : effectActions(effect, ctx, options)),
+    );
+  }
+  return actions;
+}
+
 /** One step's actions — empty when its `when` predicate does not hold. */
 function stepActions(step: StepIR, ctx: ResolveContext, options: BindOptions): Action[] {
   if (step.when && !predicateHolds(step.when, ctx, options)) return [];
@@ -490,12 +1386,14 @@ async function stepActionsAsync(
     await runRepeat(step, ctx, options, prompt, apply);
     return [];
   }
-  return step.effects.flatMap((effect) => effectActions(effect, ctx, options));
+  return effectsAsync(step.effects, ctx, options, prompt, apply);
 }
 
-/** True when any of these steps needs to ask, or repeats. */
+/** True when any of these steps needs to ask, repeats, or runs a choice round. */
 function asks(steps: readonly StepIR[]): boolean {
-  return steps.some((step) => step.optional === true || step.repeat !== undefined);
+  return steps.some(
+    (step) => step.optional === true || step.repeat !== undefined || step.effects.some(isRoundEffect),
+  );
 }
 
 /** A repeat with no cap of its own still cannot run away. */
@@ -518,6 +1416,7 @@ async function runRepeat(
   const cap = Math.min(repeat.max ?? REPEAT_LIMIT, REPEAT_LIMIT);
   const mandatory = repeat.min ?? 0;
   for (let iteration = 0; iteration < cap; iteration += 1) {
+    ctx.engine.gas.spend('loop', `repeat ${prompt}`);
     // The condition gates every iteration, mandatory ones included: the
     // floor means the player is not consulted, not that the effect applies
     // regardless.
@@ -531,7 +1430,7 @@ async function runRepeat(
       });
       if (answer.kind === 'confirm' && !answer.yes) return;
     }
-    const actions = step.effects.flatMap((effect) => effectActions(effect, ctx, options));
+    const actions = await effectsAsync(step.effects, ctx, options, prompt, apply);
     if (actions.length > 0) await apply(actions);
   }
   if (repeat.max === undefined) {
@@ -669,6 +1568,7 @@ function bindTargeting(targeting: TargetingIR, options: BindOptions): TargetPatt
  */
 export function bindAbility(ir: AbilityIR, options: BindOptions): ManualAbility {
   const steps = ir.steps;
+  assertRoundsSound(ir.name, steps, options);
   const availableCheck = ir.available ? checkOf(ir.available, options) : undefined;
   return cast({
     id: ir.id,
@@ -702,7 +1602,13 @@ export function bindAbility(ir: AbilityIR, options: BindOptions): ManualAbility 
         event: NO_EVENT,
         subject: undefined,
         bindings: bindPicks(ir.targets, targeting, options, actx),
+        ...(actx.host ? { host: actx.host } : {}),
+        rounds: new Map(),
+        rolled: { results: [] },
+        variables: new Map(),
+        temporary: new TemporaryZones(),
       };
+      try {
       if (steps.length <= 1 && !asks(steps)) {
         return steps.flatMap((step) => stepActions(step, ctx, options));
       }
@@ -712,13 +1618,16 @@ export function bindAbility(ir: AbilityIR, options: BindOptions): ManualAbility 
       if (steps.length <= 1) {
         // One step, but it asks or repeats — the single-apply shortcut
         // cannot await.
-        return stepActionsAsync(steps[0]!, ctx, options, ir.name, apply);
+        return await stepActionsAsync(steps[0]!, ctx, options, ir.name, apply);
       }
       for (const step of steps) {
         const actions = await stepActionsAsync(step, ctx, options, ir.name, apply);
         if (actions.length > 0) await apply(actions);
       }
       return [];
+      } finally {
+        await clearTemporary(ctx, options);
+      }
     },
   });
 }
@@ -787,7 +1696,79 @@ function sourceTypeOf(ir: TriggerIR): 'character' | 'buff' {
   return 'character';
 }
 
+/**
+ * Binds a `Zone` section. It is applied by the host, not cast: it needs the game's
+ * zones and players to exist, and it runs once per instance of the zone.
+ */
+function bindZone(ir: ZoneSectionIR, options: BindOptions): ZoneBinding {
+  /** Runs `steps` once for each instance of the zone (each player's, if per-player), with its owner as "you". */
+  const run = async (
+    engine: GameEngine,
+    steps: readonly StepIR[],
+    only?: Player,
+  ): Promise<void> => {
+    const id = options.aliases?.[ir.zone] ?? ir.zone;
+    const def = engine.zones.definitions.find((candidate) => candidate.id === id);
+    if (!def) throw new Error(`Zone "${ir.zone}": the game has no zone "${id}"`);
+    const perPlayer = (def.scope ?? 'shared') === 'per-player';
+    const owners: (Player | undefined)[] = perPlayer ? engine.players : [undefined];
+    for (const owner of owners) {
+      if (only && owner !== only) continue;
+      // "You" is the instance's owner: run as their first character, who they control.
+      const holder = owner ?? engine.players[0];
+      const self = holder?.livingCharacters[0] ?? holder?.characters[0];
+      if (!self) throw new Error(`Zone "${ir.zone}": there is no player to apply it for`);
+      const ctx: ResolveContext = {
+        self,
+        engine,
+        targeting: undefined,
+        event: NO_EVENT,
+        subject: undefined,
+        bindings: NO_BINDINGS,
+        thisZone: engine.zones.zone(id, owner)!,
+        rounds: new Map(),
+        rolled: { results: [] },
+        variables: new Map(),
+        temporary: new TemporaryZones(),
+      };
+      const apply = async (actions: Action[]): Promise<void> => {
+        if (actions.length > 0) await engine.apply(actions, { source: self });
+      };
+      try {
+        for (const step of steps) await apply(await stepActionsAsync(step, ctx, options, `Zone ${ir.zone}`, apply));
+      } finally {
+        await clearTemporary(ctx, options);
+      }
+    }
+  };
+  return {
+    zone: ir.zone,
+    apply: (engine) => run(engine, ir.steps),
+    async trigger(event, engine, turnOwner) {
+      for (const rule of ir.triggers ?? []) {
+        if (rule.event !== event) continue;
+        await run(engine, rule.steps, rule.yours ? turnOwner : undefined);
+      }
+    },
+  };
+}
+
+/**
+ * Refuses an ability whose choice rounds break the table procedure (a secret
+ * choice never revealed, a choice read before it is revealed, …). The messages
+ * come from `validateRounds` and say what to write instead; warnings are not
+ * errors and are left to whoever reports diagnostics.
+ */
+function assertRoundsSound(name: string, steps: readonly StepIR[], options: BindOptions): void {
+  if (options.allowUnsoundRounds) return;
+  const errors = validateRounds(steps).filter((issue) => issue.severity === 'error');
+  if (errors.length > 0) {
+    throw new Error(`"${name}": ${errors.map((issue) => issue.message).join(' ')}`);
+  }
+}
+
 export function bindTrigger(ir: TriggerIR, options: BindOptions): AnyTriggeredAbility {
+  assertRoundsSound(ir.name, ir.steps, options);
   const check = ir.filter ? checkOf(ir.filter, options) : undefined;
 
   /**
@@ -907,7 +1888,12 @@ export function bindTrigger(ir: TriggerIR, options: BindOptions): AnyTriggeredAb
         event: { subjects: kept, sources },
         subject: undefined,
         bindings: NO_BINDINGS,
+        rounds: new Map(),
+        rolled: { results: [] },
+        variables: new Map(),
+        temporary: new TemporaryZones(),
       };
+      try {
       if (ir.steps.length <= 1 && !asks(ir.steps)) {
         return ir.steps.flatMap((step) => stepActions(step, ctx, options));
       }
@@ -915,13 +1901,16 @@ export function bindTrigger(ir: TriggerIR, options: BindOptions): AnyTriggeredAb
         await tctx.engine.apply(actions, { source: tctx.self });
       };
       if (ir.steps.length <= 1) {
-        return stepActionsAsync(ir.steps[0]!, ctx, options, ir.name, apply);
+        return await stepActionsAsync(ir.steps[0]!, ctx, options, ir.name, apply);
       }
       for (const step of ir.steps) {
         const actions = await stepActionsAsync(step, ctx, options, ir.name, apply);
         if (actions.length > 0) await apply(actions);
       }
       return [];
+      } finally {
+        await clearTemporary(ctx, options);
+      }
     },
   });
 }
@@ -1146,9 +2135,18 @@ function expiryAbility(ir: BuffIR): Ability {
 /* ------------------------------ documents ----------------------------- */
 
 export function bindDocument(doc: DocumentIR, options: BindOptions): BindResult {
+  // An effect that names a sibling ability ("have Open Present") finds it here,
+  // lazily, so the abilities may refer to each other in any order.
+  const abilities: ManualAbility[] = [];
+  const bound: BindOptions = {
+    ...options,
+    resolveAbility: (id) => options.resolveAbility?.(id) ?? abilities.find((ability) => ability.id === id),
+  };
+  abilities.push(...doc.abilities.map((ir) => bindAbility(ir, bound)));
   return {
-    abilities: doc.abilities.map((ir) => bindAbility(ir, options)),
-    buffs: doc.buffs.map((ir) => bindBuff(ir, options)),
-    triggers: doc.triggers.map((ir) => bindTrigger(ir, options)),
+    abilities,
+    zones: (doc.zones ?? []).map((ir) => bindZone(ir, bound)),
+    buffs: doc.buffs.map((ir) => bindBuff(ir, bound)),
+    triggers: doc.triggers.map((ir) => bindTrigger(ir, bound)),
   };
 }

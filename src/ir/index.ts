@@ -52,6 +52,22 @@ export type {
   StepIR,
   TargetBindingIR,
   EffectIR,
+  ChoosersIR,
+  CardSelectorIR,
+  CardOrderIR,
+  ContestIR,
+  ContestPlayersIR,
+  ContestRuleIR,
+  PlayerListIR,
+  CardSourceIR,
+  RestIR,
+  CastableRefIR,
+  ZoneRefIR,
+  ChooseOrderIR,
+  TableRowIR,
+  ZoneSectionIR,
+  PickIR,
+  RolledStat,
   EntityQueryIR,
   PredicateIR,
   ValueIR,
@@ -62,6 +78,7 @@ export type {
   CompareOp,
 } from './ability.js';
 export { IR_VERSION, isEntityEffect } from './ability.js';
+export { validateRounds, type RoundIssue } from './rounds.js';
 
 /* ------------------------- the expression IR -------------------------- */
 export {
@@ -76,7 +93,9 @@ export {
   type VariableNode,
 } from './declared-fn/index.js';
 export {
+  MATH_ROOTS,
   evaluateMathExpression,
+  type EvaluateHooks,
   mathToLatex,
   mathToSource,
   parseMathExpression,
@@ -102,4 +121,5 @@ export {
   type Trigger,
   type BindOptions,
   type BindResult,
+  type ZoneBinding,
 } from './bind/index.js';

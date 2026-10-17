@@ -204,6 +204,11 @@ export interface AbilityStackObject extends StackObjectBase {
 
 export type StackObject = SpellObject | AbilityStackObject;
 
+/** Whose pile a finished card goes to: its owner's, which is not always its caster's (a stolen card). */
+function ownerOf(object: SpellObject): Player {
+  return (object.card.owner as Player | undefined) ?? object.controller;
+}
+
 /** The entity that occupies a zone for this object. */
 export function entityOf(object: StackObject): Entity {
   return object.kind === 'spell' ? object.card : object.ability;
@@ -350,6 +355,14 @@ export class CardStack {
 
   constructor(engine: GameEngine) {
     this.#engine = engine;
+    // A card an effect takes off the stack (`Move a creature card from the stack to play.`)
+    // is no longer waiting to resolve: its object leaves with it, and does not resolve.
+    // Resolution and countering take their object off first, so they never reach here.
+    engine.observe((event) => {
+      if (event.type !== 'zone:changed' || !('from' in event) || event.from.id !== 'stack') return;
+      const index = this.#objects.findIndex((object) => entityOf(object) === event.entity);
+      if (index !== -1 && event.to.id !== 'active') this.#objects.splice(index, 1);
+    });
   }
 
   /** The stack, **top first** — the resolution order. */
@@ -567,7 +580,7 @@ export class CardStack {
       this.#engine.removeEntity(object.ability);
       return;
     }
-    await this.#engine.moveTo(object.card, GARBAGE.id, { reason, owner: object.controller });
+    await this.#engine.moveTo(object.card, GARBAGE.id, { reason, owner: ownerOf(object) });
   }
 
   /**
@@ -610,7 +623,7 @@ export class CardStack {
     // still there.
     if (this.#zone('active').contains(entity)) {
       if (object.kind === 'ability') this.#engine.removeEntity(entity);
-      else await this.#engine.moveTo(object.card, object.destination, { reason: 'resolved', owner: object.controller });
+      else await this.#engine.moveTo(object.card, object.destination, { reason: 'resolved', owner: ownerOf(object) });
     }
     return { object, outcome: 'resolved', targets: legal };
   }

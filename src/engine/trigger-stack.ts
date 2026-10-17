@@ -21,7 +21,7 @@ import type { AnyTriggeredAbility, TargetPattern, Targeting, TriggerContext } fr
 import type { Action } from './actions.js';
 import type { Character } from './character.js';
 import type { EventSource, GameEvent } from './events.js';
-import type { ChoiceAnswer, ChoiceRequest } from './choice.js';
+import { chosenCharacters, type ChoiceAnswer, type ChoiceRequest } from './choice.js';
 import { ImmediateScheduler, type ReadyTrigger, type TriggerScheduler } from './trigger-scheduler.js';
 import { Buff, type Status } from './status/index.js';
 
@@ -64,6 +64,8 @@ export interface TriggerStackServices {
   readonly context: (self: Character, status: Status, event: GameEvent) => TriggerContext<GameEvent['type']>;
   /** Asks a choice and validates the answer (see `GameEngine.#ask`). */
   readonly ask: (request: ChoiceRequest) => Promise<ChoiceAnswer>;
+  /** The engine's gas meter: every trigger that fires spends from it. */
+  readonly gas?: { spend(kind: 'trigger', what?: string): void };
   /**
    * Decides what order triggers run in, and when (trigger-scheduler.ts).
    * Defaults to `ImmediateScheduler` — registration order, seeded shuffle,
@@ -195,6 +197,7 @@ export class TriggerStack {
   /** Runs one trigger from the active stack (auto- or prompt-targeting). */
   async #runTrigger(listener: TriggerListener, event: GameEvent): Promise<void> {
     const { owner, status, ability } = listener;
+    this.#services.gas?.spend('trigger', ability.name);
     // The listener only receives events of its subscribed type, so the event
     // is safe to narrow to the ability's type.
     const ctx = this.#services.context(owner, status, event);
@@ -215,7 +218,7 @@ export class TriggerStack {
         source: owner,
         pattern,
       });
-      targeting = { targets: answer.kind === 'select' ? [...answer.chosen] : [] };
+      targeting = { targets: chosenCharacters(answer) };
     } else if (ability.targeting) {
       targeting = { targets: this.#services.validTargets(ability.targeting, owner) };
     } else if (ability.targets) {

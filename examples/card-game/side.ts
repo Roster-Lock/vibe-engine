@@ -24,9 +24,10 @@ import {
   type Zone,
   type ZoneRegistry,
 } from '../../src/engine/index.js';
-import { ACTIVE, DECK, GARBAGE, HAND, STACK } from '../../src/games/cards/zones.js';
+import { createDraw, type DrawFn } from '../../src/games/cards/draw.js';
+import { ACTIVE, DECK, GARBAGE, HAND, STACK, STOLEN } from '../../src/games/cards/zones.js';
 import type { Card, CardSide } from './cards.js';
-import { instantiate, type CardObject } from './objects.js';
+import { HAND_ABILITIES, instantiate, type CardObject } from './objects.js';
 
 /**
  * The slice of a card player a side needs. Structural rather than an import
@@ -111,15 +112,29 @@ export class Side implements CardSide {
   /** Creatures that have already attacked this turn. */
   readonly attacked = new Set<Character>();
   #engine: GameEngine;
+  readonly #drawFn: DrawFn;
 
   constructor(player: CardOwner, engine: GameEngine) {
     this.player = player;
     this.hero = player.hero;
     this.#engine = engine;
+    // `draw(player, count)` is the shared function (`src/games/cards/draw.ts`);
+    // this side supplies Hearthstone's edges: fatigue on an empty deck, a burn
+    // past ten cards.
+    this.#drawFn = createDraw(engine, {
+      library: DECK.id,
+      hand: HAND.id,
+      maxHand: MAX_HAND,
+      overflow: GARBAGE.id,
+      onEmpty: async () => {
+        this.fatigue += 1;
+        await engine.apply([damage(this.hero.gauge('hp'), this.fatigue)]);
+      },
+    });
     const zones = engine.zones;
     // Declaring is idempotent (`ZoneRegistry.declare`), so a side is
     // self-contained whether or not its game pre-declared `CARD_ZONES`.
-    for (const zone of [DECK, HAND, GARBAGE, ACTIVE, STACK] as const) zones.declare(zone);
+    for (const zone of [DECK, HAND, GARBAGE, ACTIVE, STACK, STOLEN] as const) zones.declare(zone);
     this.active = zones.zone(ACTIVE.id)!;
     this.stack = zones.zone(STACK.id)!;
     this.deck = new CardPile(zones, zones.zone(DECK.id, player)!);
@@ -129,12 +144,24 @@ export class Side implements CardSide {
     // The deck is instantiated once: a creature card becomes the permanent it
     // will be, now, so playing it is a move rather than a construction.
     // (Two copies of one card are two entities from the same printed data.)
+    // Each physical card needs an id of its own (a sealed "commit a card" round names cards by
+    // id), so the second copy of a printed card is `id#2`, the third `id#3`. The first keeps
+    // the printed id; `printedId` is always the printed one.
+    const copies = new Map<string, number>();
     for (const card of player.deckList) {
+      const nth = (copies.get(card.id) ?? 0) + 1;
+      copies.set(card.id, nth);
       const object = instantiate(card, player.hero.controller!, this);
+      if (nth > 1) (object as { id: string }).id = `${card.id}#${nth}`;
       if (object.type === 'character') {
         engine.registerCharacter(object, { zone: DECK.id, owner: player });
       } else {
         engine.zones.add(object, zones.zone(DECK.id, player)!);
+      }
+      // Abilities the card gives itself (`Suspend: …`): its owner may use them while it is in their hand.
+      for (const own of object.handAbilities ?? []) {
+        HAND_ABILITIES.add(own);
+        engine.grantAbility(object, own, [player], { until: 'manual' });
       }
     }
   }
@@ -156,19 +183,7 @@ export class Side implements CardSide {
    * pipeline; a full hand burns the card into the garbage.
    */
   async draw(count = 1): Promise<void> {
-    for (let i = 0; i < count; i++) {
-      const card = this.deck.top;
-      if (!card) {
-        this.fatigue += 1;
-        await this.#engine.apply([damage(this.hero.gauge('hp'), this.fatigue)]);
-        continue;
-      }
-      if (this.hand.size >= MAX_HAND) {
-        await this.#engine.moveTo(card, GARBAGE.id, { owner: this.player }); // burned
-        continue;
-      }
-      await this.#engine.moveTo(card, HAND.id, { owner: this.player });
-    }
+    await this.#drawFn(this.player, count);
   }
 }
 

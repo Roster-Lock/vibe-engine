@@ -27,7 +27,9 @@ export type RuleTiming =
   /** The turn belongs to someone new: crystals, refill, wake, draw. */
   | 'turn:start'
   /** The turn is ending, before the engine's `turn:end` event. */
-  | 'turn:end';
+  | 'turn:end'
+  /** A creature has just entered play (a rule that is about *that* creature, not the turn). */
+  | 'creature:enters';
 
 /** Whose side of the table a rule acts on. */
 export type RuleScope =

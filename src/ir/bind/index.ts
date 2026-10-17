@@ -16,4 +16,4 @@
  */
 export { compileBatchEvent, type BatchEvent } from './batch-event.js';
 export { compileTrigger, type Trigger } from './trigger.js';
-export { bindDocument, type BindOptions, type BindResult } from './ability.js';
+export { bindDocument, type BindOptions, type BindResult, type ZoneBinding } from './ability.js';

@@ -29,6 +29,7 @@ export const DECK: ZoneDef = {
   ordered: true,
   visibility: 'hidden',
   scope: 'per-player',
+  ownerOnly: true,
   group: 'library',
 };
 
@@ -37,6 +38,7 @@ export const HAND: ZoneDef = {
   id: 'hand',
   visibility: 'owner',
   scope: 'per-player',
+  ownerOnly: true,
   group: 'hand',
 };
 
@@ -108,6 +110,18 @@ export const REVEALED: ZoneDef = {
  * questions about the same pile, and a second one only forced every reader
  * to tell two removed zones apart.
  */
-export const CARD_ZONES: readonly ZoneDef[] = [DECK, HAND, STACK, ACTIVE, REVEALED, PLAY, GARBAGE];
+/**
+ * Another player's card that you may look at and cast — `Thoughtsteal`'s pile. It is
+ * *not* `ownerOnly`: it holds cards that belong to someone else, which a hand, a library
+ * and a graveyard refuse. Only the player holding it sees it.
+ */
+export const STOLEN: ZoneDef = {
+  id: 'stolen',
+  visibility: 'owner',
+  scope: 'per-player',
+  group: 'castable',
+};
+
+export const CARD_ZONES: readonly ZoneDef[] = [DECK, HAND, STACK, ACTIVE, REVEALED, PLAY, GARBAGE, STOLEN];
 
 export { GARBAGE };

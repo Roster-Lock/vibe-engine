@@ -6,6 +6,7 @@
  * of input), so the editor can squiggle several independent mistakes at
  * once instead of stopping at the first.
  */
+import { rollStatOf } from './rounds.js';
 import {
   ADJECTIVES,
   BATCH_EVENT_COUNT_WORDS,
@@ -47,6 +48,9 @@ import type {
   Doc,
   Owner,
   Sentence,
+  TableRow,
+  ZoneSection,
+  ValueTest,
   Span,
   Who,
   WithClause,
@@ -55,7 +59,7 @@ import type {
 } from './ast.js';
 import { lex, type Token } from './lexer.js';
 import { ZoneDictionary, emptyZoneDictionary } from './zone-dictionary.js';
-import type { MathExpression } from '../ir/index.js';
+import type { CardOrderIR, CardSelectorIR, CardSourceIR, ContestIR, ContestPlayersIR, MathExpression, PlayerListIR, RestIR, ZoneRefIR } from '../ir/index.js';
 
 export interface ParseResult {
   readonly doc: Doc;
@@ -65,6 +69,10 @@ export interface ParseResult {
 export interface ParseOptions {
   /** The zone names a trigger may name (a game's deck, stack, active slot…). */
   readonly zones?: ZoneDictionary;
+  /** Contests a sentence may refer to by name (`Each player plays Rock Paper Scissors.`). */
+  readonly contests?: readonly ContestIR[];
+  /** Creature definitions a sentence may create by name. */
+  readonly creatures?: readonly string[];
 }
 
 const ABILITY_NAME_FALLBACK = 'Untitled';
@@ -89,6 +97,11 @@ class Parser {
   readonly #text: string;
   /** The zone names this document may name — engine zones plus the host's. */
   readonly #zones: ZoneDictionary;
+  /** Contests the host or the document defines, by name. */
+  readonly #contests: readonly ContestIR[];
+  readonly #creatures: readonly string[];
+  /** Whether a contest has been played yet in this document (`the winners` need one). */
+  #contestPlayed = false;
   #index = 0;
   /**
    * While true, a comma **ends** a condition instead of reading as `and`.
@@ -104,6 +117,8 @@ class Parser {
     this.#text = text;
     this.#tokens = lex(text);
     this.#zones = options.zones ?? emptyZoneDictionary();
+    this.#contests = options.contests ?? [];
+    this.#creatures = options.creatures ?? [];
   }
 
   parse(): ParseResult {
@@ -117,10 +132,12 @@ class Parser {
     const abilities: AbilitySection[] = [];
     const buffs: BuffSection[] = [];
     const imports: import('./ast.js').ImportSection[] = [];
+    const zones: ZoneSection[] = [];
     const docTriggers: TriggerSentence[] = [];
     const pending: Sentence[] = [];
     let currentAbility: AbilitySection | undefined;
     let currentBuff: BuffSection | undefined;
+    let currentZone: ZoneSection | undefined;
     let seenHeading = false;
 
     while (true) {
@@ -128,7 +145,16 @@ class Parser {
       if (token.kind === 'eof') break;
       if (token.kind === 'word' && token.atLineStart && SECTION_WORDS.includes(token.lower as (typeof SECTION_WORDS)[number])) {
         seenHeading = true;
-        if (token.lower === 'ability') {
+        currentZone = undefined;
+        if (token.lower === 'zone') {
+          const section = this.#parseZoneHeading();
+          if (section) {
+            zones.push(section);
+            currentZone = section;
+          }
+          currentAbility = undefined;
+          currentBuff = undefined;
+        } else if (token.lower === 'ability') {
           const section = this.#parseAbilityHeading();
           if (section) {
             abilities.push(section);
@@ -264,6 +290,34 @@ class Parser {
       // "Untitled" ability; afterwards they must belong to an Ability or Buff.
       const sentence = this.#parseSentence();
       if (sentence) {
+        // "Cards in this zone" belongs to a `Zone` section, and a `Zone` section holds nothing else.
+        const aboutThisZone = sentence.kind === 'zoneAbility' && sentence.owners === 'this';
+        if (currentZone) {
+          // A standing rule of the zone (`At the start of your turn, …`) is about it too.
+          if (aboutThisZone || (sentence.event !== undefined && sentence.event.startsWith('turn:'))) currentZone.sentences.push(sentence);
+          else {
+            this.#diagnostics.push({
+              severity: 'error',
+              message:
+                'a Zone section is about its own zone — write "Cards in this zone have <ability> for <players>." or a rule that starts "At the start of your turn, …"',
+              code: 'zone-section-sentence',
+              start: sentence.span.start,
+              end: sentence.span.end,
+            });
+          }
+          continue;
+        }
+        if (aboutThisZone) {
+          this.#diagnostics.push({
+            severity: 'error',
+            message:
+              '"this zone" needs a zone to be about — put the sentence under a "Zone <name>" heading, or name the zone: "Cards in your boxed zone have …"',
+            code: 'this-zone-outside-zone',
+            start: sentence.span.start,
+            end: sentence.span.end,
+          });
+          continue;
+        }
         if (currentAbility) {
           currentAbility.sentences.push(sentence);
         } else if (currentBuff) {
@@ -316,7 +370,7 @@ class Parser {
         };
       }
     }
-    return { abilities, buffs, imports, triggers: docTriggers };
+    return { abilities, buffs, imports, triggers: docTriggers, zones };
   }
 
   #parseImport(): import('./ast.js').ImportSection | undefined {
@@ -374,6 +428,30 @@ class Parser {
       span: { start: start.start, end: last.end },
       name,
       nameSpan: { start: first.start, end: last.end },
+      sentences: [],
+    };
+  }
+
+  /** `Zone boxed` — the heading of a section about one of the game's zones. */
+  #parseZoneHeading(): ZoneSection | undefined {
+    const start = this.#advance(); // 'zone'
+    const nameStart = this.#peek();
+    if (!this.#isWordOnLine(nameStart)) {
+      this.#fail(start, 'expected a zone name after "Zone", e.g. "Zone boxed"', 'syntax');
+      this.#skipToNextLine();
+      return undefined;
+    }
+    const zone = this.#parseZoneName('expected a zone name after "Zone", e.g. "Zone boxed"');
+    if (zone === null) {
+      this.#skipToNextLine();
+      return undefined;
+    }
+    if (this.#peek().kind === 'punct' && this.#peek().text === '.') this.#advance();
+    return {
+      kind: 'zone',
+      span: { start: start.start, end: this.#previous().end },
+      zone,
+      nameSpan: { start: nameStart.start, end: nameStart.end },
       sentences: [],
     };
   }
@@ -523,6 +601,20 @@ class Parser {
     const token = this.#peek();
     if (token.kind !== 'word') return undefined;
 
+    // `At the start of your turn,` — each time the turn is the owner's.
+    if (
+      token.lower === 'at' &&
+      this.#peekOffset(1)?.lower === 'the' &&
+      this.#peekOffset(2)?.lower === 'start' &&
+      this.#peekOffset(3)?.lower === 'of' &&
+      this.#peekOffset(4)?.lower === 'your' &&
+      this.#peekOffset(5)?.lower === 'turn'
+    ) {
+      this.#index += 6;
+      if (this.#peek().kind === 'punct' && this.#peek().text === ',') this.#advance();
+      return 'turn:start:yours';
+    }
+
     if (token.lower === 'when') {
       const t1 = this.#peekOffset(1);
       // "when the turn starts/ends,"
@@ -574,6 +666,7 @@ class Parser {
   #looksLikeTrigger(): boolean {
     const next = this.#peek(1);
     if (next.kind === 'word' && next.lower === 'the') return false; // "when the turn …"
+    if (this.#startsReveal()) return false; // "when they are ready, reveal"
     if (next.kind === 'word' && (next.lower === 'turn' || next.lower.startsWith('turn:'))) return false;
     return true;
   }
@@ -960,14 +1053,134 @@ class Parser {
         condition,
       };
     } else {
-      this.#fail(
-        next,
-        `expected "there are …", "any …", "every …", or "this …" after "${start.text}"`,
-        'syntax',
-      );
-      return undefined;
+      const value = this.#tryValueCondition(token);
+      if (value === null) return undefined; // a value condition, malformed — already reported
+      if (!value) {
+        this.#fail(
+          next,
+          `expected "there are …", "any …", "every …", "this …", or a value like "that total is 10 or more" after "${start.text}"`,
+          'syntax',
+        );
+        return undefined;
+      }
+      clause = value;
     }
     return clause;
+  }
+
+  /**
+   * `<value> is <test>` — tried, not assumed. Returns the clause, `null` when it
+   * *is* a value condition but its test is malformed (reported), and `undefined`
+   * when it is not one at all, so the caller can name every shape the `if` takes.
+   *
+   * "Is a value condition" means the words before `is` read as one amount and
+   * `is` follows it directly: `that total is …` and `AttackerRoll is …` qualify;
+   * `the board is full` does not (`the` is not an amount), so it keeps the
+   * message that lists the other shapes.
+   */
+  #tryValueCondition(start: Token): IfClause | null | undefined {
+    if (!this.#looksLikeValueCondition()) return undefined;
+    const mark = this.#index;
+    const diagnosticsBefore = this.#diagnostics.length;
+    const value = this.#parseMathExpr();
+    const next = this.#peek();
+    if (!value || next.kind !== 'word' || next.lower !== 'is') {
+      this.#index = mark;
+      this.#diagnostics.length = diagnosticsBefore;
+      return undefined;
+    }
+    this.#advance(); // 'is'
+    const test = this.#parseValueTest();
+    if (!test) return null;
+    return { kind: 'value', span: { start: start.start, end: this.#previous().end }, value, test };
+  }
+
+  /** True when an `is` comes before the clause's comma: `that total is 10 or more,`. */
+  #looksLikeValueCondition(): boolean {
+    for (let offset = 0; offset < 14; offset += 1) {
+      const token = this.#peekOffset(offset);
+      if (!token || token.kind === 'eof') return false;
+      if (token.kind === 'word' && token.lower === 'is') return offset > 0;
+      if (token.kind === 'punct' && token.text === ',') return false;
+      if (token.kind === 'punct' && token.text === '.') {
+        // A property dot (`roll.total`) is glued to the words either side of it;
+        // a sentence's own full stop is not.
+        const before = this.#peekOffset(offset - 1);
+        const after = this.#peekOffset(offset + 1);
+        const property = before && after && after.kind === 'word' && this.#adjacent(before, token) && this.#adjacent(token, after);
+        if (!property) return false;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * What follows `is`: `10`, `2 to 5`, `10 or more`, `5 or less`, or a
+   * comparison — `higher than <amount>`, `lower than <amount>`, `the same as
+   * <amount>`.
+   */
+  #parseValueTest(): ValueTest | undefined {
+    const first = this.#peek();
+    const hint = 'write "that total is 10 or more", "… is 2 to 5", "… is higher than <value>", or "… is the same as <value>"';
+    if (first.kind === 'word') {
+      let op: '>' | '<' | '=' | undefined;
+      if (first.lower === 'higher' && this.#peek(1).lower === 'than') {
+        op = '>';
+        this.#advance();
+        this.#advance();
+      } else if (first.lower === 'lower' && this.#peek(1).lower === 'than') {
+        op = '<';
+        this.#advance();
+        this.#advance();
+      } else if (first.lower === 'the' && this.#peek(1).lower === 'same' && this.#peek(2).lower === 'as') {
+        op = '=';
+        this.#advance();
+        this.#advance();
+        this.#advance();
+      }
+      if (!op) {
+        this.#fail(first, `expected a number or a comparison after "is" — ${hint}`, 'syntax');
+        return undefined;
+      }
+      const other = this.#parseMathExpr();
+      if (!other) return undefined;
+      return { kind: 'compare', op, other };
+    }
+    if (first.kind !== 'number') {
+      this.#fail(first, `expected a number or a comparison after "is" — ${hint}`, 'syntax');
+      return undefined;
+    }
+    this.#advance();
+    const low = Number(first.text);
+    const joiner = this.#peek();
+    if (joiner.kind === 'word' && joiner.lower === 'to') {
+      this.#advance();
+      const upper = this.#peek();
+      if (upper.kind !== 'number') {
+        this.#fail(upper, `expected a number after "${first.text} to"`, 'syntax');
+        return undefined;
+      }
+      this.#advance();
+      const high = Number(upper.text);
+      if (high < low) {
+        this.#fail(upper, `"${first.text} to ${upper.text}" counts down — the larger number goes last`, 'count-range');
+        return undefined;
+      }
+      return { kind: 'range', exact: false, min: low, max: high, text: `${first.text} to ${upper.text}` };
+    }
+    if (joiner.kind === 'word' && joiner.lower === 'or') {
+      this.#advance();
+      const bound = this.#peek();
+      if (bound.kind !== 'word' || (bound.lower !== 'more' && bound.lower !== 'less')) {
+        this.#fail(bound, `expected "more" or "less" after "${first.text} or"`, 'syntax');
+        return undefined;
+      }
+      this.#advance();
+      return bound.lower === 'more'
+        ? { kind: 'range', exact: false, min: low, max: null, text: `${first.text} or more` }
+        : { kind: 'range', exact: false, min: null, max: low, text: `${first.text} or less` };
+    }
+    return { kind: 'range', exact: true, min: low, max: low, text: first.text };
   }
 
   /**
@@ -1403,14 +1616,77 @@ class Parser {
         sentence = this.#parseAddRemove(true);
         break;
       case 'remove':
-        sentence = this.#parseAddRemove(false);
+        sentence = this.#looksLikeCounters() ? this.#parseRemoveCounters() : this.#parseAddRemove(false);
         break;
       case 'toggle':
         sentence = this.#parseToggle();
         break;
-      case 'you':
+      case 'roll':
+        sentence = this.#parseRoll();
+        break;
+      case 'store':
+        sentence = this.#parseStore();
+        break;
+      case 'cards':
+        sentence = this.#parseZoneAbility();
+        break;
+      case 'reveal':
+        sentence = this.#startsCardSelector(1) ? this.#parseRevealCards() : this.#parseRevealCard();
+        break;
+      case 'cast':
+        sentence = this.#startsCardSelector(1) ? this.#parseCastCards() : this.#parseCastCard();
+        break;
+      case 'move':
+        sentence = this.#startsCardSelector(1) ? this.#parseMoveCards() : this.#parseMoveCard();
+        break;
+      case 'draw':
+        sentence = this.#parseDraw();
+        break;
+      case 'scry':
+      case 'surveil':
+        sentence = this.#parseDraw();
+        break;
+      case 'target':
+        sentence = this.#parseSplit();
+        break;
+      case 'create':
+      case 'the':
+        sentence = this.#parseCreate();
+        break;
+      case 'you': {
+        // `You win the game.` / `You choose …` / `You commit …` / `You put the card …`
+        const verbWord = this.#peek(1).lower;
+        const afterVerb = this.#peek(2).lower;
+        sentence =
+          verbWord === 'create' ? this.#parseCreate() : verbWord === 'play' || (verbWord === 'and' && this.#peek(2).lower === 'target' && this.#peek(4).lower === 'play')
+            ? this.#parsePlay()
+            : verbWord === 'separate'
+            ? this.#parseSplit()
+            : verbWord === 'choose' && afterVerb !== 'a' && afterVerb !== 'an'
+              ? this.#parseChoosePile()
+              : verbWord === 'choose' || verbWord === 'commit'
+            ? this.#parseChoose()
+            : verbWord === 'put'
+              ? this.#parseMoveChosen()
+              : this.#parseResultSentence();
+        break;
+      }
       case 'all':
         sentence = this.#parseResultSentence();
+        break;
+      case 'each': {
+        const verbWord = this.#peek(2).lower;
+        sentence =
+          verbWord === 'creates' ? this.#parseCreate() : verbWord === 'plays' ? this.#parsePlay() : verbWord === 'puts' ? this.#parseMoveChosen() : this.#parseChoose();
+        break;
+      }
+      case 'when':
+        sentence = this.#parseReveal();
+        break;
+      case 'starting':
+      case 'ending':
+      case 'in':
+        sentence = this.#parseOpenVote();
         break;
       default:
         sentence = this.#unexpectedSentenceStart(token);
@@ -1716,6 +1992,1346 @@ class Parser {
     };
   }
 
+  /* ------------------------------ this card ------------------------------ */
+
+  /** `this card` after a verb. Anything else is a pointed error, not a stray word. */
+  #expectThisCard(verb: string, example: string): boolean {
+    if (this.#matchWord('this') && this.#matchWord('card')) return true;
+    this.#failHere(
+      `"${verb}" here acts on the card an ability belongs to — write "this card", e.g. "${example}"`,
+      'syntax',
+    );
+    return false;
+  }
+
+  /** `its owner's <zone>` — the pile of whoever the card came from. */
+  #parseOwnersZone(example: string): string | null {
+    if (!(this.#matchWord('its') && this.#matchWord("owner's"))) {
+      this.#failHere(`expected "its owner's <zone>" — e.g. "${example}"`, 'syntax');
+      return null;
+    }
+    return this.#parseZoneName(`expected the zone — e.g. "${example}"`);
+  }
+
+  /**
+   * `Cards in your boxed zone have Open Present for each opponent.`
+   *
+   * Whose zone (`your` / `each player's` / `each opponent's` / `the`), the zone's
+   * name and an optional `zone`, `have`, the ability's name (as written, up to
+   * `for` or the full stop), and who may use it (default: anyone).
+   */
+  #parseZoneAbility(): Sentence | undefined {
+    const example = 'Cards in your boxed zone have Open Present for each opponent.';
+    const start = this.#advance(); // 'cards'
+    if (!this.#matchWord('in')) {
+      this.#failHere(`write "Cards in <whose> <zone> have <ability>" — e.g. "${example}"`, 'syntax');
+      return this.#abort();
+    }
+    let owners: 'you' | 'each' | 'opponents' | 'shared' | 'this';
+    // `Cards in this zone` — the zone of the `Zone` section it is written in.
+    const thisZone = this.#peek().lower === 'this' && this.#peek(1).lower === 'zone';
+    if (thisZone) {
+      this.#advance();
+      this.#advance();
+      owners = 'this';
+    } else if (this.#matchWord('your')) owners = 'you';
+    else if (this.#peek().lower === 'each' && this.#peek(1).lower === "player's") {
+      this.#advance();
+      this.#advance();
+      owners = 'each';
+    } else if (this.#peek().lower === 'each' && this.#peek(1).lower === "opponent's") {
+      this.#advance();
+      this.#advance();
+      owners = 'opponents';
+    } else if (this.#matchWord('the')) owners = 'shared';
+    else {
+      this.#failHere(`whose zone? — "your", "each player's", "each opponent's" or "the" — e.g. "${example}"`, 'syntax');
+      return this.#abort();
+    }
+    const zoneStart = this.#peek();
+    const zone = owners === 'this' ? '' : this.#parseZoneName(`expected the zone — e.g. "${example}"`);
+    if (zone === null) return this.#abort();
+    const zoneSpan = { start: zoneStart.start, end: owners === 'this' ? this.#previous().end : this.#previous().end };
+    if (owners !== 'this') this.#matchWord('zone'); // optional: "your hand" / "your boxed zone"
+    // `no longer have` takes the ability away instead of giving it.
+    let remove = false;
+    if (this.#peek().lower === 'no' && this.#peek(1).lower === 'longer') {
+      this.#advance();
+      this.#advance();
+      remove = true;
+    }
+    if (!this.#matchWord('have')) {
+      this.#failHere(`expected "have <ability>" — e.g. "${example}"`, 'syntax');
+      return this.#abort();
+    }
+    const first = this.#peek();
+    let last = first;
+    while (
+      (this.#peek().kind === 'word' && this.#peek().lower !== 'for') ||
+      this.#peek().kind === 'number'
+    ) {
+      last = this.#advance();
+    }
+    if (last === first && !(first.kind === 'word' && first.lower !== 'for') && first.kind !== 'number') {
+      this.#fail(first, `expected the name of an ability after "have" — e.g. "${example}"`, 'syntax');
+      return this.#abort();
+    }
+    const abilitySpan = { start: first.start, end: last.end };
+    const ability = this.#text.slice(abilitySpan.start, abilitySpan.end);
+    let users: 'you' | 'each' | 'opponents' = 'each';
+    if (remove && this.#peek().lower === 'for') {
+      this.#failHere('"no longer have" takes the ability away from everyone it was given to — drop the "for …"', 'syntax');
+      return this.#abort();
+    }
+    if (this.#matchWord('for')) {
+      if (this.#matchWord('you')) users = 'you';
+      else if (this.#matchWord('each')) {
+        if (this.#matchWord('player')) users = 'each';
+        else if (this.#matchWord('opponent')) users = 'opponents';
+        else {
+          this.#failHere('"each" is followed by "player" or "opponent" — e.g. "for each opponent"', 'syntax');
+          return this.#abort();
+        }
+      } else {
+        this.#failHere('who may use it? — "for you", "for each player" or "for each opponent"', 'syntax');
+        return this.#abort();
+      }
+    }
+    const end = this.#expectSentenceEnd();
+    if (!end) return this.#abort();
+    return {
+      kind: 'zoneAbility',
+      span: { start: start.start, end },
+      zone,
+      zoneSpan,
+      owners,
+      ability,
+      abilitySpan,
+      users,
+      ...(remove ? { remove: true as const } : {}),
+    };
+  }
+
+  /** `Reveal this card.` */
+  #parseRevealCard(): Sentence | undefined {
+    const start = this.#advance(); // 'reveal'
+    if (!this.#expectThisCard('Reveal', 'Reveal this card.')) return this.#abort();
+    const end = this.#expectSentenceEnd();
+    if (!end) return this.#abort();
+    return { kind: 'revealCard', span: { start: start.start, end } };
+  }
+
+  /**
+   * `Move the top 3 cards from your library to your hand.` —
+   * `Move <cards> from <zone> to <zone>.`
+   */
+  #parseMoveCards(): Sentence | undefined {
+    const example = 'Move the top 3 cards from your library to your hand.';
+    const start = this.#advance(); // 'move'
+    const selectStart = this.#peek();
+    const select = this.#parseCardSelector(example);
+    if (!select) return this.#abort();
+    const selectSpan = { start: selectStart.start, end: this.#previous().end };
+    const fromStart = this.#peek();
+    const from = this.#parseCardSource(example);
+    if (!from) return this.#abort();
+    const fromSpan = { start: fromStart.start, end: this.#previous().end };
+    if (!this.#matchWord('to')) {
+      this.#failHere(`expected "to <zone>" — e.g. "${example}"`, 'syntax');
+      return this.#abort();
+    }
+    const toStart = this.#peek();
+    const to = this.#parseZoneRef(true, example);
+    if (!to) return this.#abort();
+    const toSpan = { start: toStart.start, end: this.#previous().end };
+    const order = this.#parseOrderOfChoice();
+    let rest: RestIR | undefined;
+    if (this.#peek().lower === 'and' && this.#peek(1).lower === 'the' && this.#peek(2).lower === 'rest') {
+      if (!select.any) {
+        this.#failHere('"the rest" means the cards not picked — it needs "any number of …" to say which are picked', 'syntax');
+        return this.#abort();
+      }
+      this.#advance();
+      this.#advance();
+      this.#advance();
+      if (!(this.#matchWord('on') || this.#matchWord('to') || this.#matchWord('in') || this.#matchWord('into'))) {
+        this.#failHere(`expected where the rest go — e.g. "and the rest on the top of your deck"`, 'syntax');
+        return this.#abort();
+      }
+      const restTo = this.#parseZoneRef(true, example);
+      if (!restTo) return this.#abort();
+      const restOrder = this.#parseOrderOfChoice();
+      rest = { to: restTo, ...(restOrder ? { order: restOrder } : {}) };
+    }
+    const end = this.#expectSentenceEnd();
+    if (!end) return this.#abort();
+    return {
+      kind: 'moveCards',
+      span: { start: start.start, end },
+      select,
+      selectSpan,
+      from,
+      fromSpan,
+      to,
+      toSpan,
+      ...(order ? { order } : {}),
+      ...(rest ? { rest } : {}),
+    };
+  }
+
+  /**
+   * `Each player plays Rock Paper Scissors.` / `You and target opponent play Rock Paper Scissors.`
+   * — the contest is defined elsewhere (a `Contest` section, or the host's), and receives the list of players.
+   */
+  #parsePlay(): Sentence | undefined {
+    const example = 'You and target opponent play Rock Paper Scissors.';
+    const start = this.#peek();
+    let players: ContestPlayersIR;
+    if (this.#peek().lower === 'you' && this.#peek(1).lower === 'and' && this.#peek(2).lower === 'target' && this.#peek(3).lower === 'opponent') {
+      for (let i = 0; i < 5; i += 1) this.#advance(); // you and target opponent play
+      players = 'you-and-opponent';
+    } else if (this.#matchWord('you')) {
+      this.#advance(); // play
+      players = 'you';
+    } else {
+      this.#advance(); // each
+      if (this.#matchWord('player')) players = 'each';
+      else if (this.#matchWord('opponent')) players = 'opponents';
+      else {
+        this.#failHere('"Each" is followed by "player" or "opponent" — e.g. "Each player plays Rock Paper Scissors."', 'syntax');
+        return this.#abort();
+      }
+      this.#advance(); // plays
+    }
+    // The contest's name: the words up to the sentence end.
+    const first = this.#peek();
+    const words: Token[] = [];
+    while (this.#peek().kind === 'word') words.push(this.#advance());
+    const name = words.map((w) => w.text).join(' ');
+    const found = this.#contests.find((c) => c.name.toLowerCase() === name.toLowerCase());
+    if (!found) {
+      const known = this.#contests.map((c) => `"${c.name}"`).join(', ');
+      this.#fail(
+        first,
+        name.length === 0
+          ? `play what? — name a contest (${known || 'none are defined'}), e.g. "${example}"`
+          : `unknown contest "${name}"${known ? ` — the contests are ${known}` : ' — none are defined; define one with a "Contest" section'}`,
+        'unknown-contest',
+      );
+      return this.#abort();
+    }
+    const end = this.#expectSentenceEnd();
+    if (!end) return this.#abort();
+    this.#contestPlayed = true;
+    return { kind: 'play', span: { start: start.start, end }, players, contest: found };
+  }
+
+  /**
+   * `Create a Giant Golem.` / `The winners create a Giant Golem.` / `Each player creates a Giant Golem.` —
+   * a creature defined elsewhere (`Creature Giant Golem 6/6`), made in play for each of the players.
+   */
+  #parseCreate(): Sentence | undefined {
+    const example = 'The winners create a Giant Golem.';
+    const start = this.#peek();
+    let players: PlayerListIR;
+    if (this.#matchWord('create')) players = 'you';
+    else if (this.#matchWord('you')) {
+      this.#advance(); // create
+      players = 'you';
+    } else if (this.#matchWord('the')) {
+      const which = this.#peek();
+      if (!(which.lower === 'winners' || which.lower === 'losers') || this.#peek(1).lower !== 'create') {
+        this.#failHere(`"The" here is "The winners create …" or "The losers create …" — e.g. "${example}"`, 'syntax');
+        return this.#abort();
+      }
+      if (!this.#contestPlayed) {
+        this.#failHere(`"the ${which.lower}" are the result of a contest — play one first, e.g. "Each player plays Rock Paper Scissors."`, 'syntax');
+        return this.#abort();
+      }
+      players = which.lower as 'winners' | 'losers';
+      this.#advance();
+      this.#advance();
+    } else {
+      this.#advance(); // each
+      if (this.#matchWord('player')) players = 'each';
+      else if (this.#matchWord('opponent')) players = 'opponents';
+      else {
+        this.#failHere('"Each" is followed by "player" or "opponent" — e.g. "Each player creates a Giant Golem."', 'syntax');
+        return this.#abort();
+      }
+      this.#advance(); // creates
+    }
+    if (!(this.#matchWord('a') || this.#matchWord('an'))) {
+      this.#failHere(`expected "a" and the creature's name — e.g. "${example}"`, 'syntax');
+      return this.#abort();
+    }
+    const first = this.#peek();
+    const words: Token[] = [];
+    while (this.#peek().kind === 'word') words.push(this.#advance());
+    const name = words.map((w) => w.text).join(' ');
+    const found = this.#creatures.find((c) => c.toLowerCase() === name.toLowerCase());
+    if (!found) {
+      const known = this.#creatures.map((c) => `"${c}"`).join(', ');
+      this.#fail(
+        first,
+        `unknown creature "${name}"${known ? ` — the creatures are ${known}` : ' — none are defined; define one with "Creature <name> <power>/<health>"'}`,
+        'unknown-creature',
+      );
+      return this.#abort();
+    }
+    const end = this.#expectSentenceEnd();
+    if (!end) return this.#abort();
+    return { kind: 'create', span: { start: start.start, end }, players, creature: found };
+  }
+
+  /** The temporary piles named so far in this document. */
+  readonly #tempNames = new Set<string>();
+
+  /** `Target opponent separates Pool into Fact and Fiction.` / `You separate Pool into …` */
+  #parseSplit(): Sentence | undefined {
+    const example = 'Target opponent separates Pool into Fact and Fiction.';
+    const start = this.#peek();
+    let chooser: 'you' | 'opponent';
+    if (this.#matchWord('target')) {
+      if (!this.#matchWord('opponent') || !this.#matchWord('separates')) {
+        this.#failHere(`expected "Target opponent separates …" — e.g. "${example}"`, 'syntax');
+        return this.#abort();
+      }
+      chooser = 'opponent';
+    } else {
+      this.#advance(); // you
+      this.#advance(); // separate
+      chooser = 'you';
+    }
+    const from = this.#parseZoneRef(false, example);
+    if (!from || from.whose !== 'temporary') {
+      if (from) this.#failHere(`only a temporary zone can be separated into piles — e.g. "${example}"`, 'syntax');
+      return this.#abort();
+    }
+    if (!this.#matchWord('into')) {
+      this.#failHere(`expected "into <pile> and <pile>" — e.g. "${example}"`, 'syntax');
+      return this.#abort();
+    }
+    const first = this.#peek();
+    if (first.kind !== 'word') {
+      this.#failHere('expected the first pile\'s name', 'syntax');
+      return this.#abort();
+    }
+    this.#advance();
+    if (!this.#matchWord('and')) {
+      this.#failHere(`two piles — "into ${first.text} and <another>"`, 'syntax');
+      return this.#abort();
+    }
+    const second = this.#peek();
+    if (second.kind !== 'word') {
+      this.#failHere('expected the second pile\'s name', 'syntax');
+      return this.#abort();
+    }
+    this.#advance();
+    this.#tempNames.add(first.text);
+    this.#tempNames.add(second.text);
+    const end = this.#expectSentenceEnd();
+    if (!end) return this.#abort();
+    return { kind: 'split', span: { start: start.start, end }, chooser, from, into: [first.text, second.text] };
+  }
+
+  /** `You choose Fact or Fiction.` */
+  #parseChoosePile(): Sentence | undefined {
+    const start = this.#advance(); // you
+    this.#advance(); // choose
+    const first = this.#peek();
+    const known = (t: Token): boolean => t.kind === 'word' && this.#tempNames.has(t.text);
+    if (!known(first)) {
+      this.#failHere('which piles? — name two piles made by "separates … into …", e.g. "You choose Fact or Fiction."', 'syntax');
+      return this.#abort();
+    }
+    this.#advance();
+    if (!this.#matchWord('or') || !known(this.#peek())) {
+      this.#failHere(`choose between two piles — e.g. "You choose ${first.text} or <the other pile>."`, 'syntax');
+      return this.#abort();
+    }
+    const second = this.#advance();
+    const end = this.#expectSentenceEnd();
+    if (!end) return this.#abort();
+    return { kind: 'choosePile', span: { start: start.start, end }, options: [first.text, second.text] };
+  }
+
+  /** `in the order of your choice` — the controller puts the moved cards down in an order they pick. */
+  #parseOrderOfChoice(): CardOrderIR | undefined {
+    if (
+      this.#peek().lower === 'in' &&
+      this.#peek(1).lower === 'the' &&
+      this.#peek(2).lower === 'order' &&
+      this.#peek(3).lower === 'of' &&
+      ['your', 'their'].includes(this.#peek(4).lower) &&
+      this.#peek(5).lower === 'choice'
+    ) {
+      for (let i = 0; i < 6; i += 1) this.#advance();
+      return 'chosen';
+    }
+    return undefined;
+  }
+
+  /** True when the token `ahead` places on is where a card selector starts (`the`, `a`, `all`, a count). */
+  #startsCardSelector(ahead: number): boolean {
+    const token = this.#peek(ahead);
+    return token.kind === 'number' || ['the', 'a', 'an', 'all', 'any'].includes(token.lower);
+  }
+
+  /**
+   * Where the cards are taken from: `from your hand`, or `castable by target opponent` —
+   * everything that player could cast, wherever it is.
+   */
+  #parseCardSource(example: string): CardSourceIR | null {
+    if (this.#matchWord('castable')) {
+      if (!this.#matchWord('by')) {
+        this.#failHere('expected "by <player>" — e.g. "castable by target opponent"', 'syntax');
+        return null;
+      }
+      if (this.#matchWord('you')) return { castableBy: 'you' };
+      if (this.#peek().lower === 'target' && this.#peek(1).lower === 'opponent') {
+        this.#advance();
+        this.#advance();
+        return { castableBy: 'opponent' };
+      }
+      if (this.#peek().lower === 'each' && this.#peek(1).lower === 'opponent') {
+        this.#advance();
+        this.#advance();
+        return { castableBy: 'opponents' };
+      }
+      if (this.#peek().lower === 'each' && this.#peek(1).lower === 'player') {
+        this.#advance();
+        this.#advance();
+        return { castableBy: 'each' };
+      }
+      this.#failHere('castable by whom? — "you", "target opponent", "each opponent" or "each player"', 'syntax');
+      return null;
+    }
+    if (!this.#matchWord('from')) {
+      this.#failHere(`expected "from <zone>" or "castable by <player>" after the cards — e.g. "${example}"`, 'syntax');
+      return null;
+    }
+    return this.#parseZoneRef(false, example);
+  }
+
+  /** `Remove a counter from …` / `Remove 2 counters from …` — as opposed to `Remove Poison from …`. */
+  #looksLikeCounters(): boolean {
+    const first = this.#peek(1);
+    if (!(first.kind === 'number' || first.lower === 'a' || first.lower === 'an')) return false;
+    for (const ahead of [2, 3]) {
+      if (['counter', 'counters'].includes(this.#peek(ahead).lower)) return true;
+    }
+    return false;
+  }
+
+  /** `Remove a counter from all cards in this zone.` */
+  #parseRemoveCounters(): Sentence | undefined {
+    const example = 'Remove a counter from all cards in this zone.';
+    const start = this.#advance(); // 'remove'
+    let count = 1;
+    if (this.#peek().kind === 'number') count = Number(this.#advance().text);
+    else this.#advance(); // a / an
+    let counterKind: string | undefined;
+    if (!['counter', 'counters'].includes(this.#peek().lower)) counterKind = this.#advance().text;
+    this.#advance(); // counter(s)
+    if (!this.#matchWord('from')) {
+      this.#failHere(`expected "from <cards>" — e.g. "${example}"`, 'syntax');
+      return this.#abort();
+    }
+    const select = this.#parseCardSelector(example);
+    if (!select) return this.#abort();
+    if (!(this.#matchWord('in') || this.#matchWord('from'))) {
+      this.#failHere(`expected "in <zone>" — e.g. "${example}"`, 'syntax');
+      return this.#abort();
+    }
+    const from = this.#parseZoneRef(false, example);
+    if (!from) return this.#abort();
+    const end = this.#expectSentenceEnd();
+    if (!end) return this.#abort();
+    return {
+      kind: 'removeCounters',
+      span: { start: start.start, end },
+      count,
+      ...(counterKind ? { counterKind } : {}),
+      select,
+      from,
+    };
+  }
+
+  /** `Cast all cards with no counters from this zone without paying their cost.` */
+  #parseCastCards(): Sentence | undefined {
+    const example = 'Cast all cards with no counters from this zone without paying their cost.';
+    const start = this.#advance(); // 'cast'
+    const select = this.#parseCardSelector(example);
+    if (!select) return this.#abort();
+    if (!this.#matchWord('from')) {
+      this.#failHere(`expected "from <zone>" — e.g. "${example}"`, 'syntax');
+      return this.#abort();
+    }
+    const from = this.#parseZoneRef(false, example);
+    if (!from) return this.#abort();
+    let free = false;
+    if (this.#peek().lower === 'without' && this.#peek(1).lower === 'paying') {
+      this.#advance();
+      this.#advance();
+      if (!(this.#matchWord('their') || this.#matchWord('its')) || !this.#matchWord('cost')) {
+        this.#failHere('expected "their cost" — e.g. "without paying their cost"', 'syntax');
+        return this.#abort();
+      }
+      free = true;
+    }
+    const end = this.#expectSentenceEnd();
+    if (!end) return this.#abort();
+    return { kind: 'castCards', span: { start: start.start, end }, select, from, ...(free ? { free: true as const } : {}) };
+  }
+
+  /** `Reveal all cards castable by target opponent.` / `Reveal the top 2 cards from your deck.` */
+  #parseRevealCards(): Sentence | undefined {
+    const example = 'Reveal all cards castable by target opponent.';
+    const start = this.#advance(); // 'reveal'
+    const selectStart = this.#peek();
+    const select = this.#parseCardSelector(example);
+    if (!select) return this.#abort();
+    const selectSpan = { start: selectStart.start, end: this.#previous().end };
+    const fromStart = this.#peek();
+    const from = this.#parseCardSource(example);
+    if (!from) return this.#abort();
+    const fromSpan = { start: fromStart.start, end: this.#previous().end };
+    const end = this.#expectSentenceEnd();
+    if (!end) return this.#abort();
+    return { kind: 'revealCards', span: { start: start.start, end }, select, selectSpan, from, fromSpan };
+  }
+
+  /**
+   * Which cards: `the top card`, `the bottom 2 cards`, `a card`, `2 cards`, `a random card`,
+   * `all cards` — each optionally `creature` or `spell` cards.
+   */
+  #parseCardSelector(example: string): CardSelectorIR | null {
+    let how: CardSelectorIR['how'];
+    let count = 1;
+    let counted = false;
+    const any = this.#peek().lower === 'any' && this.#peek(1).lower === 'number' && this.#peek(2).lower === 'of';
+    if (any) {
+      this.#advance();
+      this.#advance();
+      this.#advance();
+    }
+    if (this.#matchWord('the')) {
+      const end = this.#peek();
+      if (this.#matchWord('top')) how = 'top';
+      else if (this.#matchWord('bottom')) how = 'bottom';
+      else {
+        this.#fail(end, `"the" here is "the top …" or "the bottom …" — e.g. "${example}"`, 'syntax');
+        return null;
+      }
+    } else if (this.#matchWord('all')) {
+      how = 'all';
+      count = 0;
+    } else if (this.#matchWord('a') || this.#matchWord('an')) {
+      how = this.#matchWord('random') ? 'random' : 'choose';
+    } else if (this.#peek().kind === 'number') {
+      count = Number(this.#advance().text);
+      counted = true;
+      how = this.#matchWord('random') ? 'random' : 'choose';
+      if (!Number.isInteger(count) || count < 1) {
+        this.#failHere('how many cards? — a whole number, 1 or more', 'syntax');
+        return null;
+      }
+    } else {
+      this.#failHere(`which cards? — "the top card", "a card", "2 cards", "a random card" or "all cards" — e.g. "${example}"`, 'syntax');
+      return null;
+    }
+    if ((how === 'top' || how === 'bottom') && this.#peek().kind === 'number') {
+      count = Number(this.#advance().text);
+      counted = true;
+      if (!Number.isInteger(count) || count < 1) {
+        this.#failHere('how many cards? — a whole number, 1 or more', 'syntax');
+        return null;
+      }
+    }
+    void counted;
+    let cardKind: 'creature' | 'spell' | undefined;
+    if (this.#matchWord('creature')) cardKind = 'creature';
+    else if (this.#matchWord('spell')) cardKind = 'spell';
+    if (!(this.#matchWord('card') || this.#matchWord('cards'))) {
+      this.#failHere(`expected "card" or "cards" — e.g. "${example}"`, 'syntax');
+      return null;
+    }
+    let counters: 'none' | undefined;
+    if (this.#peek().lower === 'with' && this.#peek(1).lower === 'no' && this.#peek(2).lower === 'counters') {
+      this.#advance();
+      this.#advance();
+      this.#advance();
+      counters = 'none';
+    }
+    if (any) {
+      if (how === 'all') {
+        this.#failHere('"any number of" picks from a group — "all cards" has nothing to pick', 'syntax');
+        return null;
+      }
+      if (how === 'choose' || how === 'random') count = 0; // no pool size: any number of the cards in the zone
+      if (how === 'random') {
+        this.#failHere('"any number of" is chosen by a player, so it cannot be "random"', 'syntax');
+        return null;
+      }
+    }
+    return {
+      how,
+      count,
+      ...(cardKind ? { cardKind } : {}),
+      ...(any ? { any: true as const } : {}),
+      ...(counters ? { counters } : {}),
+    };
+  }
+
+  /** `your hand` / `its owner's garbage` / `target opponent's hand` / `each opponent's hand` / `each player's hand` / `the play`. */
+  #parseZoneRef(allowOwner: boolean, example: string): ZoneRefIR | null {
+    if (this.#peek().lower === 'this' && this.#peek(1).lower === 'zone') {
+      this.#advance();
+      this.#advance();
+      return { whose: 'this', zone: 'this' };
+    }
+    // A temporary pile: named where it is made (`the temporary zone Pool`), then by its name.
+    if (this.#peek().lower === 'the' && this.#peek(1).lower === 'temporary' && this.#peek(2).lower === 'zone') {
+      const name = this.#peek(3);
+      if (name.kind !== 'word') {
+        this.#fail(name, 'expected the temporary zone\'s name — e.g. "the temporary zone Pool"', 'syntax');
+        return null;
+      }
+      for (let i = 0; i < 4; i += 1) this.#advance();
+      this.#tempNames.add(name.text);
+      return { whose: 'temporary', zone: name.text };
+    }
+    if (this.#peek().lower === 'the' && ['chosen', 'other'].includes(this.#peek(1).lower) && this.#peek(2).lower === 'pile') {
+      const which = this.#peek(1).lower;
+      for (let i = 0; i < 3; i += 1) this.#advance();
+      return { whose: 'temporary', zone: which === 'chosen' ? '@chosen' : '@other' };
+    }
+    if (this.#peek().kind === 'word' && this.#tempNames.has(this.#peek().text)) {
+      return { whose: 'temporary', zone: this.#advance().text };
+    }
+    let position: 'top' | 'bottom' | undefined;
+    if (allowOwner && this.#peek().lower === 'the' && ['top', 'bottom'].includes(this.#peek(1).lower) && this.#peek(2).lower === 'of') {
+      position = this.#peek(1).lower as 'top' | 'bottom';
+      this.#advance();
+      this.#advance();
+      this.#advance();
+    }
+    let whose: ZoneRefIR['whose'];
+    if (this.#matchWord('your')) whose = 'you';
+    else if (this.#peek().lower === 'its' && this.#peek(1).lower === "owner's") {
+      if (!allowOwner) {
+        this.#failHere('"its owner\'s" names where a card goes back to — the cards are taken from a zone that is named outright, e.g. "from your garbage"', 'syntax');
+        return null;
+      }
+      this.#advance();
+      this.#advance();
+      whose = 'owner';
+    } else if (this.#peek().lower === 'target' && this.#peek(1).lower === "opponent's") {
+      this.#advance();
+      this.#advance();
+      whose = 'opponent';
+    } else if (this.#peek().lower === 'each' && this.#peek(1).lower === "opponent's") {
+      this.#advance();
+      this.#advance();
+      whose = 'opponents';
+    } else if (this.#peek().lower === 'each' && this.#peek(1).lower === "player's") {
+      this.#advance();
+      this.#advance();
+      whose = 'each';
+    } else if (allowOwner && this.#matchWord('their')) whose = 'owner';
+    else if (this.#matchWord('the')) whose = 'shared';
+    else if (this.#peek().kind === 'word' && this.#zones.resolve(this.#peek().text) !== undefined) whose = 'shared';
+    else {
+      this.#failHere(`whose zone? — "your", "its owner\'s", "target opponent\'s", "each opponent\'s", "each player\'s" or "the" — e.g. "${example}"`, 'syntax');
+      return null;
+    }
+    const zone = this.#parseZoneName(`expected the zone — e.g. "${example}"`);
+    if (zone === null) return null;
+    this.#matchWord('zone'); // optional: "your stolen zone"
+    return { whose, zone, ...(position ? { position } : {}) };
+  }
+
+  /** `Move this card to its owner's garbage.` */
+  #parseMoveCard(): Sentence | undefined {
+    const example = "Move this card to its owner's garbage.";
+    const start = this.#advance(); // 'move'
+    if (!this.#expectThisCard('Move', example)) return this.#abort();
+    if (!this.#matchWord('to')) {
+      this.#failHere(`expected "to its owner's <zone>" — e.g. "${example}"`, 'syntax');
+      return this.#abort();
+    }
+    const zoneStart = this.#peek();
+    // `to the Suspend zone` — a zone named outright, the card's owner's — or `to its owner's garbage`.
+    let article: 'the' | undefined;
+    let zone: string | null;
+    if (this.#peek().lower === 'the' && this.#peek(1).lower !== 'top' && this.#peek(1).lower !== 'bottom') {
+      this.#advance();
+      zone = this.#parseZoneName(`expected the zone — e.g. "Move this card to the Suspend zone with 5 counters on it."`);
+      if (zone !== null) {
+        this.#matchWord('zone');
+        article = 'the';
+      }
+    } else {
+      zone = this.#parseOwnersZone(example);
+    }
+    if (zone === null) return this.#abort();
+    const zoneSpan = { start: zoneStart.start, end: this.#previous().end };
+    // `with 5 counters on it` (or `with 3 time counters on it`)
+    let counters: { count: number; kind?: string } | undefined;
+    if (this.#matchWord('with')) {
+      const count = this.#expectNumber('after "with"', 'syntax');
+      if (!count) return this.#abort();
+      let kind: string | undefined;
+      if (this.#peek().kind === 'word' && !['counter', 'counters'].includes(this.#peek().lower)) kind = this.#advance().text;
+      if (!(this.#matchWord('counter') || this.#matchWord('counters')) || !this.#matchWord('on') || !this.#matchWord('it')) {
+        this.#failHere('expected "counters on it" — e.g. "with 5 counters on it"', 'syntax');
+        return this.#abort();
+      }
+      counters = { count: count.value, ...(kind ? { kind } : {}) };
+    }
+    const end = this.#expectSentenceEnd();
+    if (!end) return this.#abort();
+    return {
+      kind: 'moveCard',
+      span: { start: start.start, end },
+      zone,
+      zoneSpan,
+      ...(article ? { article } : {}),
+      ...(counters ? { counters } : {}),
+    };
+  }
+
+  /**
+   * `Cast this card if you can.` /
+   * `Cast this card if you can, otherwise move it to its owner's garbage.`
+   */
+  #parseCastCard(): Sentence | undefined {
+    const example = "Cast this card if you can, otherwise move it to its owner's garbage.";
+    const start = this.#advance(); // 'cast'
+    if (!this.#expectThisCard('Cast', example)) return this.#abort();
+    if (!(this.#matchWord('if') && this.#matchWord('you') && this.#matchWord('can'))) {
+      this.#failHere(
+        'whether a card can be cast is the game\'s to say, so write "if you can" — e.g. "Cast this card if you can."',
+        'syntax',
+      );
+      return this.#abort();
+    }
+    let otherwise: { zone: string; zoneSpan: { start: number; end: number } } | undefined;
+    if (this.#peekPunct(',')) {
+      this.#advance();
+      if (!(this.#matchWord('otherwise') && this.#matchWord('move') && this.#matchWord('it') && this.#matchWord('to'))) {
+        this.#failHere(`after the comma write "otherwise move it to its owner's <zone>" — e.g. "${example}"`, 'syntax');
+        return this.#abort();
+      }
+      const zoneStart = this.#peek();
+      const zone = this.#parseOwnersZone(example);
+      if (zone === null) return this.#abort();
+      otherwise = { zone, zoneSpan: { start: zoneStart.start, end: this.#previous().end } };
+    }
+    const end = this.#expectSentenceEnd();
+    if (!end) return this.#abort();
+    return { kind: 'castCard', span: { start: start.start, end }, ...(otherwise ? { otherwise } : {}) };
+  }
+
+  /* ------------------------ variables and drawing ------------------------ */
+
+  /** `Store that value as AttackerRoll.` */
+  #parseStore(): Sentence | undefined {
+    const start = this.#advance(); // 'store'
+    const value = this.#parseMathExpr();
+    if (!value) return this.#abort();
+    if (!this.#matchWord('as')) {
+      this.#failHere('expected "as <Name>" — e.g. "Store that value as AttackerRoll."', 'syntax');
+      return this.#abort();
+    }
+    const nameToken = this.#peek();
+    if (nameToken.kind !== 'word') {
+      this.#fail(nameToken, 'expected a name made of letters — e.g. "Store that value as AttackerRoll."', 'syntax');
+      return this.#abort();
+    }
+    this.#advance();
+    const end = this.#expectSentenceEnd();
+    if (!end) return this.#abort();
+    return {
+      kind: 'store',
+      span: { start: start.start, end },
+      value,
+      name: nameToken.text,
+      nameSpan: { start: nameToken.start, end: nameToken.end },
+    };
+  }
+
+  /** `Draw(you, 2).` / `Draw(each player, 1).` — `draw(player, count)`. */
+  #parseDraw(): Sentence | undefined {
+    const start = this.#advance(); // 'draw' | 'scry'
+    const verb = start.lower === 'scry' ? 'Scry' : start.lower === 'surveil' ? 'Surveil' : 'Draw';
+    const shape = `write it like "${verb}(you, ${verb === 'Draw' ? 2 : 3})." — the player (you / each player / each opponent), then a number`;
+    if (!this.#peekPunct('(')) {
+      this.#failHere(`"${verb}" takes a player and a number — ${shape}`, 'syntax');
+      return this.#abort();
+    }
+    this.#advance();
+    let players: PlayerListIR;
+    if (this.#matchWord('you')) players = 'you';
+    else if (this.#peek().lower === 'the' && ['winners', 'losers'].includes(this.#peek(1).lower)) {
+      players = this.#peek(1).lower as 'winners' | 'losers';
+      if (!this.#contestPlayed) {
+        this.#failHere(`"the ${players}" are the result of a contest — play one first, e.g. "Each player plays Rock Paper Scissors."`, 'syntax');
+        return this.#abort();
+      }
+      this.#advance();
+      this.#advance();
+    }
+    else if (this.#matchWord('each')) {
+      if (this.#matchWord('player')) players = 'each';
+      else if (this.#matchWord('opponent')) players = 'opponents';
+      else {
+        this.#failHere('"each" is followed by "player" or "opponent" — e.g. "${verb}(each player, 1)."', 'syntax');
+        return this.#abort();
+      }
+    } else {
+      // The old order, `Draw(2, you)`, deserves a pointer, not a stray-word error.
+      const first = this.#peek();
+      const looksLikeCount = first.kind === 'number' || (first.kind === 'word' && first.lower === 'that');
+      this.#failHere(
+        looksLikeCount
+          ? `the player comes first — ${shape}`
+          : `the player is "you", "each player" or "each opponent" — ${shape}`,
+        'syntax',
+      );
+      return this.#abort();
+    }
+    if (!this.#peekPunct(',')) {
+      this.#failHere(`"${verb}" needs a number after the player — ${shape}`, 'syntax');
+      return this.#abort();
+    }
+    this.#advance();
+    const count = this.#parseMathExpr();
+    if (!count) return this.#abort();
+    if (!this.#peekPunct(')')) {
+      this.#failHere(`expected ")" to close "${verb}(…" — ${shape}`, 'syntax');
+      return this.#abort();
+    }
+    this.#advance();
+    const end = this.#expectSentenceEnd();
+    if (!end) return this.#abort();
+    return verb === 'Draw'
+      ? { kind: 'draw', span: { start: start.start, end }, count, players }
+      : { kind: 'scry', span: { start: start.start, end }, count, players, ...(verb === 'Surveil' ? { surveil: true as const } : {}) };
+  }
+
+  /* -------------------------------- dice --------------------------------- */
+
+  /** True while a table's result line is being parsed (see `#parseTableRow`). */
+  #inTableRow = false;
+
+  /** `Roll a d20.` / `Roll 2d6.` */
+  #parseRoll(): Sentence | undefined {
+    const start = this.#advance(); // 'roll'
+    const hint = 'write "Roll a d20." for one die or "Roll 2d6." for several';
+    let count = 1;
+    let countToken: Token | undefined;
+    if (this.#peek().kind === 'number') {
+      countToken = this.#advance();
+      count = Number(countToken.text);
+    } else if (!this.#matchWord('a')) {
+      this.#failHere(`expected a number of dice — ${hint}`, 'syntax');
+      return this.#abort();
+    }
+    const d = this.#peek();
+    // `2d6` / `d20`: the `d` is glued to the number after it (and to the count before it).
+    const sidesToken = this.#peek(1);
+    if (
+      d.kind !== 'word' ||
+      d.lower !== 'd' ||
+      sidesToken.kind !== 'number' ||
+      !this.#adjacent(d, sidesToken) ||
+      (countToken && !this.#adjacent(countToken, d))
+    ) {
+      this.#failHere(`expected a die like "d20" or "2d6", with no spaces — ${hint}`, 'syntax');
+      return this.#abort();
+    }
+    this.#advance();
+    this.#advance();
+    const sides = Number(sidesToken.text);
+    if (!Number.isInteger(count) || count < 1 || count > 100) {
+      this.#diagnostics.push({
+        severity: 'error',
+        message: `${countToken?.text ?? count} dice is not a number of dice — roll between 1 and 100`,
+        code: 'roll-dice',
+        start: (countToken ?? d).start,
+        end: (countToken ?? d).end,
+      });
+      return this.#abort();
+    }
+    if (!Number.isInteger(sides) || sides < 2) {
+      this.#diagnostics.push({
+        severity: 'error',
+        message: `"d${sidesToken.text}" is not a die — a die has at least 2 sides, e.g. "d6"`,
+        code: 'roll-sides',
+        start: d.start,
+        end: sidesToken.end,
+      });
+      return this.#abort();
+    }
+    const end = this.#expectSentenceEnd();
+    if (!end) return this.#abort();
+    // Result lines directly under the roll, one per line.
+    const rows: TableRow[] = [];
+    while (!this.#inTableRow && this.#startsTableRow()) {
+      const row = this.#parseTableRow();
+      if (!row) return this.#abort();
+      rows.push(row);
+    }
+    return {
+      kind: 'roll',
+      span: { start: start.start, end: rows.length > 0 ? rows[rows.length - 1]!.span.end : end },
+      count,
+      sides,
+      ...(rows.length > 0 ? { table: rows } : {}),
+    };
+  }
+
+  /**
+   * True at a new line that begins a result line: `<number> …:` or
+   * `Otherwise:`. Cheap lookahead — a `:` before the first `.` — so a malformed
+   * header still reports a table error rather than a generic one.
+   */
+  #startsTableRow(): boolean {
+    const first = this.#peek();
+    if (!first.atLineStart) return false;
+    if (!(first.kind === 'number' || (first.kind === 'word' && first.lower === 'otherwise'))) return false;
+    for (let offset = 0; offset < 6; offset += 1) {
+      const token = this.#peekOffset(offset);
+      if (!token || token.kind === 'eof') return false;
+      if (token.kind === 'punct' && token.text === ':') return true;
+      if (token.kind === 'punct' && token.text === '.') return false;
+    }
+    return false;
+  }
+
+  /** `2 to 5: Deal 5 damage to this character.` / `15 or more: …` / `Otherwise: …` */
+  #parseTableRow(): TableRow | undefined {
+    const first = this.#advance();
+    let min = 0;
+    let max: number | null = 0;
+    let otherwise = false;
+    let text = first.text;
+    if (first.kind === 'word') {
+      otherwise = true;
+      text = 'Otherwise';
+    } else {
+      min = Number(first.text);
+      max = min;
+      const joiner = this.#peek();
+      if (joiner.kind === 'word' && joiner.lower === 'to') {
+        this.#advance();
+        const upper = this.#peek();
+        if (upper.kind !== 'number') {
+          this.#fail(upper, `expected a number after "${first.text} to" — e.g. "${first.text} to ${Number(first.text) + 3}:"`, 'syntax');
+          return undefined;
+        }
+        this.#advance();
+        max = Number(upper.text);
+        text = `${first.text} to ${upper.text}`;
+        if (max < min) {
+          this.#fail(upper, `"${text}" counts down — the larger number goes last`, 'count-range');
+          return undefined;
+        }
+      } else if (joiner.kind === 'word' && joiner.lower === 'or') {
+        this.#advance();
+        const bound = this.#peek();
+        if (bound.kind !== 'word' || (bound.lower !== 'more' && bound.lower !== 'less')) {
+          this.#fail(bound, `expected "more" or "less" after "${first.text} or"`, 'syntax');
+          return undefined;
+        }
+        this.#advance();
+        text = `${first.text} or ${bound.lower}`;
+        // Dice never roll below 1, so "or less" is open at the bottom.
+        if (bound.lower === 'more') max = null;
+        else {
+          max = min;
+          min = 0;
+        }
+      }
+    }
+    if (!this.#peekPunct(':')) {
+      this.#failHere(`expected ":" after "${text}" — e.g. "${text}: Deal 5 damage to this character."`, 'syntax');
+      return undefined;
+    }
+    this.#advance();
+    // The line's sentences: everything up to the next line. A roll inside a
+    // result line has no table of its own — its would-be lines are the outer
+    // table's next lines.
+    const sentences: Sentence[] = [];
+    this.#inTableRow = true;
+    try {
+      while (this.#peek().kind !== 'eof' && !this.#peek().atLineStart) {
+        const sentence = this.#parseSentence();
+        if (!sentence) return undefined; // already reported
+        sentences.push(sentence);
+      }
+    } finally {
+      this.#inTableRow = false;
+    }
+    if (sentences.length === 0) {
+      this.#fail(first, `"${text}:" needs something to happen — write the effect after the colon, on the same line`, 'syntax');
+      return undefined;
+    }
+    return {
+      span: { start: first.start, end: sentences[sentences.length - 1]!.span.end },
+      text,
+      min,
+      max,
+      otherwise,
+      sentences,
+    };
+  }
+
+  /* ---------------------------- choice rounds ---------------------------- */
+
+  /**
+   * The players of a choice sentence: `You`, `Each player`, `Each opponent`.
+   * Leaves the cursor on the verb.
+   */
+  #parseChoosers(): { players: 'you' | 'each' | 'opponents'; span: Span } | undefined {
+    const first = this.#advance(); // 'you' | 'each'
+    if (first.lower === 'you') return { players: 'you', span: { start: first.start, end: first.end } };
+    const noun = this.#peek();
+    if (noun.kind === 'word' && (noun.lower === 'player' || noun.lower === 'opponent')) {
+      this.#advance();
+      return {
+        players: noun.lower === 'player' ? 'each' : 'opponents',
+        span: { start: first.start, end: noun.end },
+      };
+    }
+    this.#fail(noun, '"Each" is followed by "player" or "opponent" — e.g. "Each player commits a card from their hand face down."', 'syntax');
+    return undefined;
+  }
+
+  /** The `their` / `your` before a zone: whose zone it is. The word carries no extra meaning. */
+  #matchPossessive(): boolean {
+    return this.#matchWord('their') || this.#matchWord('your');
+  }
+
+  /**
+   * `Each player commits a card from their hand face down.` (sealed) /
+   * `Each player chooses a card from their hand.` (open) — and the same with
+   * `a number from 1 to 6`.
+   *
+   * The verb decides the mode. `commit` is sealed and **must** say `face down`,
+   * because the words are the instruction a table follows; `choose` is open and
+   * must not claim to be hidden.
+   */
+  #parseChoose(): Sentence | undefined {
+    const start = this.#peek();
+    const chooser = this.#parseChoosers();
+    if (!chooser) return this.#abort();
+    const verb = this.#peek();
+    const sealedVerb = verb.kind === 'word' && (verb.lower === 'commits' || verb.lower === 'commit');
+    const openVerb = verb.kind === 'word' && (verb.lower === 'chooses' || verb.lower === 'choose');
+    if (!sealedVerb && !openVerb) {
+      this.#fail(
+        verb,
+        'expected "commits" (sealed) or "chooses" (open) — e.g. "Each player commits a card from their hand face down."',
+        'syntax',
+      );
+      return this.#abort();
+    }
+    this.#advance();
+    if (!this.#matchWord('a')) {
+      this.#failHere('expected "a card from their <zone>" or "a number from <low> to <high>" after the verb', 'syntax');
+      return this.#abort();
+    }
+    let pick: Extract<Sentence, { kind: 'choose' }>['pick'];
+    if (this.#peek().kind === 'word' && this.#peek().lower === 'vote') {
+      // `commits a vote for Attack or Retreat face down` — a sealed vote.
+      if (openVerb) {
+        this.#failHere(
+          'an open vote says who goes first — write "Starting with you, each player votes for Attack or Retreat." (or "Ending with you", "Starting with a random player", "In reverse order"), or "Each player commits a vote for … face down."',
+          'syntax',
+        );
+        return this.#abort();
+      }
+      if (chooser.players !== 'each') {
+        this.#failHere('everyone votes — write "Each player commits a vote for Attack or Retreat face down."', 'syntax');
+        return this.#abort();
+      }
+      this.#advance();
+      const options = this.#parseVoteOptions();
+      if (!options) return this.#abort();
+      pick = { kind: 'label', options };
+    } else if (this.#matchWord('card')) {
+      // `from` is the written form; `in` reads the same and is accepted.
+      if (!(this.#matchWord('from') || this.#matchWord('in'))) {
+        this.#failHere('expected "from their <zone>" after "a card" — e.g. "a card from their hand"', 'syntax');
+        return this.#abort();
+      }
+      if (!this.#matchPossessive()) {
+        this.#failHere('expected "their" or "your" before the zone — e.g. "a card from their hand"', 'syntax');
+        return this.#abort();
+      }
+      const zoneStart = this.#peek();
+      const zone = this.#parseZoneName('expected the zone the card is taken from, e.g. "from their hand"');
+      if (zone === null) return this.#abort();
+      pick = { kind: 'card', zone, zoneSpan: { start: zoneStart.start, end: this.#previous().end } };
+    } else if (this.#matchWord('number')) {
+      if (!this.#matchWord('from')) {
+        this.#failHere('expected "from <low> to <high>" after "a number" — e.g. "a number from 1 to 6"', 'syntax');
+        return this.#abort();
+      }
+      const low = this.#expectNumber('after "from"', 'syntax');
+      if (!low) return this.#abort();
+      if (!this.#matchWord('to')) {
+        this.#failHere('expected "to <high>" — e.g. "a number from 1 to 6"', 'syntax');
+        return this.#abort();
+      }
+      const high = this.#expectNumber('after "to"', 'syntax');
+      if (!high) return this.#abort();
+      if (!Number.isInteger(low.value) || !Number.isInteger(high.value) || low.value > high.value) {
+        this.#diagnostics.push({
+          severity: 'error',
+          message: `"from ${low.value} to ${high.value}" is not a range of whole numbers — write the lower number first, e.g. "from 1 to 6"`,
+          code: 'choose-range',
+          start: low.span.start,
+          end: high.span.end,
+        });
+        return this.#abort();
+      }
+      pick = { kind: 'number', min: low.value, max: high.value };
+    } else {
+      this.#failHere('you can pick "a card from their <zone>" or "a number from <low> to <high>"', 'syntax');
+      return this.#abort();
+    }
+    // The old spelling, named rather than reported as a stray word.
+    if (this.#peek().kind === 'word' && this.#peek().lower === 'in' && this.#peek(1).lower === 'secret') {
+      this.#failHere(
+        'a choice made in secret is not yet a commitment — write "commits … face down", e.g. "Each player commits a card from their hand face down."',
+        'syntax',
+      );
+      return this.#abort();
+    }
+    const faceDown = this.#peek().kind === 'word' && this.#peek().lower === 'face' && this.#peek(1).lower === 'down';
+    if (faceDown) {
+      this.#advance();
+      this.#advance();
+    }
+    if (sealedVerb && !faceDown) {
+      this.#failHere('a commitment is placed face down — add "face down", e.g. "Each player commits a card from their hand face down."', 'syntax');
+      return this.#abort();
+    }
+    if (openVerb && faceDown) {
+      this.#failHere('"chooses" is made in the open — to place it face down, write "commits … face down"', 'syntax');
+      return this.#abort();
+    }
+    const end = this.#expectSentenceEnd();
+    if (!end) return this.#abort();
+    return {
+      kind: 'choose',
+      span: { start: start.start, end },
+      players: chooser.players,
+      playersSpan: chooser.span,
+      pick,
+      secret: sealedVerb,
+    };
+  }
+
+  /**
+   * `for Attack or Retreat` / `for Red, Green or Blue` — the names a vote is
+   * between. A name is one word or a quoted string; there are at least two and
+   * no two are the same (ignoring case).
+   */
+  #parseVoteOptions(): string[] | undefined {
+    const shape = 'e.g. "votes for Attack or Retreat"';
+    if (!this.#matchWord('for')) {
+      this.#failHere(`expected "for" and the options after "vote" — ${shape}`, 'syntax');
+      return undefined;
+    }
+    const read = (): string | undefined => {
+      const token = this.#peek();
+      if (token.kind !== 'word' && token.kind !== 'string') {
+        this.#fail(token, `expected an option name (one word, or in quotes) — ${shape}`, 'syntax');
+        return undefined;
+      }
+      this.#advance();
+      return token.text;
+    };
+    const first = read();
+    if (first === undefined) return undefined;
+    const options = [first];
+    for (;;) {
+      if (this.#peekPunct(',')) {
+        this.#advance();
+        this.#matchWord('or');
+        const next = read();
+        if (next === undefined) return undefined;
+        options.push(next);
+        continue;
+      }
+      if (this.#matchWord('or')) {
+        const last = read();
+        if (last === undefined) return undefined;
+        options.push(last);
+      }
+      break;
+    }
+    if (options.length < 2) {
+      this.#failHere(`a vote needs at least two options to choose between — ${shape}`, 'vote-options');
+      return undefined;
+    }
+    const seen = new Set<string>();
+    for (const option of options) {
+      if (seen.has(option.toLowerCase())) {
+        this.#diagnostics.push({
+          severity: 'error',
+          message: `"${option}" is listed twice — each option appears once`,
+          code: 'vote-options',
+          start: this.#previous().start,
+          end: this.#previous().end,
+        });
+        return undefined;
+      }
+      seen.add(option.toLowerCase());
+    }
+    return options;
+  }
+
+  /**
+   * An open vote, with its order in the opening words:
+   * `Starting with you,` / `Ending with you,` / `Starting with a random player,` /
+   * `In reverse order,` then `each player votes for Attack or Retreat.`
+   */
+  #parseOpenVote(): Sentence | undefined {
+    const first = this.#advance(); // starting | ending | in
+    const shapes =
+      '"Starting with you", "Ending with you", "Starting with a random player" or "In reverse order"';
+    let order: 'caster-first' | 'caster-last' | 'random' | 'reverse' | undefined;
+    if (first.lower === 'starting' && this.#matchWord('with')) {
+      if (this.#matchWord('you')) order = 'caster-first';
+      else if (this.#matchWord('a') && this.#matchWord('random') && this.#matchWord('player')) order = 'random';
+    } else if (first.lower === 'ending' && this.#matchWord('with') && this.#matchWord('you')) {
+      order = 'caster-last';
+    } else if (first.lower === 'in' && this.#matchWord('reverse') && this.#matchWord('order')) {
+      order = 'reverse';
+    }
+    if (!order) {
+      this.#fail(first, `an open vote opens with who goes first: ${shapes}`, 'syntax');
+      return this.#abort();
+    }
+    if (!this.#peekPunct(',')) {
+      this.#failHere(`expected "," after the order — e.g. "${first.text} …, each player votes for Attack or Retreat."`, 'syntax');
+      return this.#abort();
+    }
+    this.#advance();
+    const who = this.#peek();
+    if (!(this.#matchWord('each') && this.#matchWord('player') && this.#matchWord('votes'))) {
+      this.#fail(who, 'everyone votes — write "each player votes for Attack or Retreat."', 'syntax');
+      return this.#abort();
+    }
+    const options = this.#parseVoteOptions();
+    if (!options) return this.#abort();
+    const end = this.#expectSentenceEnd();
+    if (!end) return this.#abort();
+    return {
+      kind: 'choose',
+      span: { start: first.start, end },
+      players: 'each',
+      playersSpan: { start: who.start, end: who.end },
+      pick: { kind: 'label', options },
+      secret: false,
+      order,
+    };
+  }
+
+  /** True when the cursor is on `when (all players|they) (are|is) ready,`. */
+  #startsReveal(): boolean {
+    const word = (offset: number): string => {
+      const token = this.#peekOffset(offset);
+      return token && token.kind === 'word' ? token.lower : '';
+    };
+    const comma = (offset: number): boolean => {
+      const token = this.#peekOffset(offset);
+      return token?.kind === 'punct' && token.text === ',';
+    };
+    if (word(0) !== 'when') return false;
+    if (word(1) === 'they') return (word(2) === 'are' || word(2) === 'is') && word(3) === 'ready' && comma(4);
+    return (
+      word(1) === 'all' && word(2) === 'players' && (word(3) === 'are' || word(3) === 'is') && word(4) === 'ready' && comma(5)
+    );
+  }
+
+  /** `When they are ready, reveal.` (or `When all players are ready, reveal.`) */
+  #parseReveal(): Sentence | undefined {
+    const start = this.#peek();
+    if (!this.#startsReveal()) return this.#unexpectedSentenceStart(start);
+    this.#advance(); // when
+    while (!(this.#peek().kind === 'punct' && this.#peek().text === ',')) this.#advance();
+    this.#advance(); // ,
+    if (!this.#matchWord('reveal')) {
+      this.#failHere('expected "reveal" — e.g. "When they are ready, reveal."', 'syntax');
+      return this.#abort();
+    }
+    const end = this.#expectSentenceEnd();
+    if (!end) return this.#abort();
+    return { kind: 'reveal', span: { start: start.start, end } };
+  }
+
+  /** `Each player puts the card they committed into their garbage.` (or `chose`, after an open choice) */
+  #parseMoveChosen(): Sentence | undefined {
+    const start = this.#peek();
+    const mover = this.#parseChoosers();
+    if (!mover) return this.#abort();
+    const verb = this.#peek();
+    if (verb.kind !== 'word' || (verb.lower !== 'puts' && verb.lower !== 'put')) {
+      this.#fail(verb, 'expected "puts" — e.g. "Each player puts the card they committed into their garbage."', 'syntax');
+      return this.#abort();
+    }
+    this.#advance();
+    const phrase = ['the', 'card'];
+    for (const word of phrase) {
+      if (!this.#matchWord(word)) {
+        this.#failHere('only "the card they committed" can be moved here — e.g. "puts the card they committed into their garbage"', 'syntax');
+        return this.#abort();
+      }
+    }
+    // `committed` after a commit, `chose` after an open choice; both name the
+    // card each player picked earlier in this ability.
+    let committed = false;
+    if (!(this.#matchWord('they') || this.#matchWord('you'))) {
+      this.#failHere('write "the card they committed" (or "chose") — it names the card each player picked earlier', 'syntax');
+      return this.#abort();
+    }
+    if (this.#matchWord('committed')) committed = true;
+    else if (!this.#matchWord('chose')) {
+      this.#failHere('write "the card they committed" (or "chose") — it names the card each player picked earlier', 'syntax');
+      return this.#abort();
+    }
+    if (!this.#matchWord('into')) {
+      this.#failHere('expected "into their <zone>" — e.g. "into their garbage"', 'syntax');
+      return this.#abort();
+    }
+    if (!this.#matchPossessive()) {
+      this.#failHere('expected "their" or "your" before the zone — e.g. "into their garbage"', 'syntax');
+      return this.#abort();
+    }
+    const zoneStart = this.#peek();
+    const zone = this.#parseZoneName('expected the zone the card goes to, e.g. "into their garbage"');
+    if (zone === null) return this.#abort();
+    const zoneSpan = { start: zoneStart.start, end: this.#previous().end };
+    const end = this.#expectSentenceEnd();
+    if (!end) return this.#abort();
+    return {
+      kind: 'moveChosen',
+      span: { start: start.start, end },
+      players: mover.players,
+      playersSpan: mover.span,
+      committed,
+      zone,
+      zoneSpan,
+    };
+  }
+
   /* --------------------------- character phrase -------------------------- */
 
   #parseCharsPhrase(): CharsPhrase | undefined {
@@ -1882,6 +3498,15 @@ class Parser {
           this.#advance();
           this.#advance();
           owner = 'opponent';
+          end = this.#previous().end;
+        } else if (ownerToken.lower === 'the' && ['winners', 'losers'].includes(this.#peek(1).lower)) {
+          if (!this.#contestPlayed) {
+            this.#fail(ownerToken, `"the ${this.#peek(1).lower}" are the result of a contest — play one first, e.g. "Each player plays Rock Paper Scissors."`, 'syntax');
+            return undefined;
+          }
+          owner = this.#peek(1).lower as 'winners' | 'losers';
+          this.#advance();
+          this.#advance();
           end = this.#previous().end;
         } else {
           if (ownerToken.kind === 'word' && OWNER_WORDS.includes(ownerToken.lower as (typeof OWNER_WORDS)[number])) {
@@ -2196,6 +3821,38 @@ class Parser {
     }
     if (token.kind === 'punct' && (token.text === 'Σ' || token.text === '∑')) {
       return this.#parseMathSum();
+    }
+    // `votes for Attack` — how many votes an option got in the latest vote.
+    if (token.kind === 'word' && token.lower === 'votes' && this.#peek(1).lower === 'for') {
+      const named = this.#peek(2);
+      if (named.kind === 'word' || named.kind === 'string') {
+        this.#advance();
+        this.#advance();
+        this.#advance();
+        return { kind: 'path', parts: ['votes', named.text] };
+      }
+      this.#fail(named, 'expected the option after "votes for" — e.g. "votes for Attack"', 'syntax');
+      return undefined;
+    }
+    // `the total` / `the result` / `the highest die` / `the lowest die` — the
+    // outcome of the latest roll, as the path `roll.<stat>` the evaluator reads.
+    if (token.kind === 'word' && (token.lower === 'that' || token.lower === 'the')) {
+      const stat = rollStatOf(this.#peek(1).lower);
+      if (stat && token.lower === 'the') {
+        // There is deliberately no "the total": with more than one roll it would
+        // not say which. Say so, rather than reading "the" as a variable name.
+        this.#failHere(
+          `write "that ${stat === 'total' ? 'total' : `${stat} die`}" — "that" is always the most recent roll. To use an earlier roll, store it: "Store that value as AttackerRoll." and write the name.`,
+          'syntax',
+        );
+        return undefined;
+      }
+      if (stat) {
+        this.#advance();
+        this.#advance();
+        if (stat !== 'total') this.#matchWord('die');
+        return { kind: 'path', parts: ['roll', stat] };
+      }
     }
     if (token.kind === 'word') {
       this.#advance();

@@ -157,6 +157,12 @@ function valueToMath(value: ValueIR): MathExpression {
       return { kind: 'path', parts: [value.attribute] };
     case 'count':
       return { kind: 'path', parts: ['count'] };
+    case 'rolled':
+      return { kind: 'path', parts: ['roll', value.stat] };
+    case 'variable':
+      return { kind: 'path', parts: [value.name] };
+    case 'votes':
+      return { kind: 'path', parts: ['votes', value.option] };
   }
 }
 

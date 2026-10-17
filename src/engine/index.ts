@@ -51,7 +51,42 @@ export {
   transform,
   popTransform,
   discover,
+  roll,
+  type RollAction,
+  type RollAdjust,
 } from './actions.js';
+
+export {
+  ViewProjector,
+  type EntityView,
+  type GameView,
+  type HiddenView,
+  type PlayerView,
+  type SlotView,
+  type ViewEvent,
+  type ViewOptions,
+  type ZoneView,
+} from './views.js';
+
+export {
+  DEFAULT_GAS_COSTS,
+  DEFAULT_GAS_LIMIT,
+  GasMeter,
+  OutOfGasError,
+  type GasCosts,
+  type GasOptions,
+  type GasTrailEntry,
+} from './gas.js';
+
+export { Grants, SEE, type CapabilityDef, type Grant, type GrantEnd } from './grants.js';
+
+export {
+  assertValidRoll,
+  createDiceRng,
+  seededRoller,
+  type RollContext,
+  type Roller,
+} from './dice.js';
 
 export {
   type GameEvent,
@@ -163,10 +198,17 @@ export {
 
 export {
   autoChoose,
+  chosenCharacters,
+  markersFor,
+  resolveLabel,
+  pickById,
+  duplicateIds,
+  resolveWritten,
   countRange,
   validateAnswer,
   AutoChooser,
   ScriptedChooser,
+  SealedRound,
   type Chooser,
   type ChoiceRequest,
   type ChoiceAnswer,
@@ -174,6 +216,11 @@ export {
   type SelectAnswer,
   type ConfirmRequest,
   type ConfirmAnswer,
+  type NumberRequest,
+  type NumberAnswer,
+  type LabelRequest,
+  type LabelAnswer,
+  type WrittenAnswer,
 } from './choice.js';
 
 export {
@@ -185,6 +232,7 @@ export {
   REMOVED,
   type Entity,
   type ZoneDef,
+  type ZoneEnd,
   type ZonePosition,
   type ZoneScope,
   type ZoneTransition,

@@ -50,8 +50,9 @@ function sentenceLines(sentences: readonly Sentence[]): string[] {
   return sentences.map(effectSummary);
 }
 
+/** The character phrase a sentence acts on, for the preview — absent for sentences about players, dice or cards. */
 function sentenceChars(sentence: Sentence): CharsPhrase | undefined {
-  return sentence.kind === 'result' ? undefined : sentence.chars;
+  return 'chars' in sentence ? sentence.chars : undefined;
 }
 
 function Formula({ expression }: { expression: import('../../english/index.js').BooleanCondition }) {

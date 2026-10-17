@@ -31,6 +31,9 @@ import { instant } from '../../src/games/cards/speed.js';
 
 export type Keyword = 'taunt' | 'charge';
 
+/** What a creature may do the turn it enters play, despite the standing rule (see `EntryRules`). */
+export type { EntryRules } from '../../src/english/card.js';
+
 /**
  * The slice of a player's side a card effect may touch — the card-layer
  * state the engine knows nothing about (see `zones.ts`).
@@ -76,6 +79,10 @@ export interface CreatureCard extends CardBase {
   readonly power: number;
   readonly health: number;
   readonly keywords?: readonly Keyword[];
+  /** Abilities the card has while it is in the hand (`Suspend: Move this card to the Suspend zone …`). */
+  readonly handAbilities?: readonly import('../../src/engine/index.js').ManualAbility[];
+  /** Exceptions to "a creature cannot act the turn it enters play". `Charge` is an attack exception. */
+  readonly entry?: import('../../src/english/card.js').EntryRules;
   /**
    * Abilities the creature **grants** on the board, built fresh per instance
    * so they can close over the side that played it (an on-death trigger that
@@ -99,6 +106,8 @@ export interface CreatureCard extends CardBase {
 
 export interface SpellCard extends CardBase {
   readonly kind: 'spell';
+  /** Abilities the card has while it is in the hand. */
+  readonly handAbilities?: readonly import('../../src/engine/index.js').ManualAbility[];
   /** Omit for a spell that picks no targets (a board-wide effect). */
   readonly targeting?: TargetPattern;
   /**

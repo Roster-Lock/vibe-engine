@@ -20,6 +20,7 @@
  * const winners = await new BattleGame(...).runLoop();
  * ```
  */
+import { OutOfGasError } from './gas.js';
 import type { Ability } from './ability/index.js';
 import type { Character } from './character.js';
 import type { Player } from './player.js';
@@ -156,6 +157,10 @@ export abstract class Game {
       }
     } catch (error) {
       if (error instanceof GameEndInterrupt) return error.winners;
+      // A loop nobody can stop is a draw (the engine has already announced
+      // `gas:exhausted`). Magic's rule for a mandatory infinite loop, and the only
+      // fair way to end a game that cannot go on.
+      if (error instanceof OutOfGasError) return [];
       throw error;
     }
   }

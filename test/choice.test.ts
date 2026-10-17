@@ -24,6 +24,7 @@ import {
   type Decision,
   type SelectRequest,
 } from '../src/games/turn-based/index.js';
+import { chosenCharacters } from '../src/engine/index.js';
 import { createEngine } from '../src/games/turn-based/index.js';
 import { endTurn, startTurn } from '../src/games/round-based/index.js';
 
@@ -237,5 +238,66 @@ describe('AutoChooser', () => {
       count: 2,
     });
     expect(answer.kind === 'select' ? answer.chosen.map((t) => t.name) : []).toEqual(['B', 'C']);
+  });
+});
+
+describe('select over entities that are not characters', () => {
+  const card = (name: string) => ({ type: 'card', name });
+  const [x, y, z] = [card('X'), card('Y'), card('Z')];
+  const request: SelectRequest = {
+    kind: 'select',
+    prompt: 'Choose a card',
+    chooser: undefined,
+    options: [x, y, z],
+    count: 1,
+  };
+
+  it('accepts a hand card as an option and rejects one that was not offered', () => {
+    expect(validateAnswer(request, { kind: 'select', chosen: [y] })).toBeUndefined();
+    expect(validateAnswer(request, { kind: 'select', chosen: [card('W')] })).toMatch(/outside/);
+  });
+
+  it('auto-chooses the fewest from the options', () => {
+    expect(autoChoose(request)).toEqual({ kind: 'select', chosen: [x] });
+  });
+
+  it('chosenCharacters keeps characters and drops everything else', () => {
+    const hero = new Character('Hero', { maxHp: 10 });
+    expect(chosenCharacters({ kind: 'select', chosen: [x, hero] })).toEqual([hero]);
+    expect(chosenCharacters({ kind: 'confirm', yes: true })).toEqual([]);
+  });
+});
+
+describe('number requests', () => {
+  const request: ChoiceRequest = { kind: 'number', prompt: 'Pick', chooser: undefined, min: 1, max: 6 };
+
+  it('accepts every integer in range, inclusive', () => {
+    for (const value of [1, 3, 6]) {
+      expect(validateAnswer(request, { kind: 'number', value })).toBeUndefined();
+    }
+  });
+
+  it('rejects out of range and non-integers', () => {
+    expect(validateAnswer(request, { kind: 'number', value: 0 })).toMatch(/from 1 to 6/);
+    expect(validateAnswer(request, { kind: 'number', value: 7 })).toMatch(/from 1 to 6/);
+    expect(validateAnswer(request, { kind: 'number', value: 2.5 })).toMatch(/whole number/);
+    expect(validateAnswer(request, { kind: 'number', value: Number.NaN })).toMatch(/whole number/);
+  });
+
+  it('rejects an answer of the wrong kind', () => {
+    expect(validateAnswer(request, { kind: 'confirm', yes: true })).toMatch(/expected a "number"/);
+    expect(validateAnswer({ kind: 'confirm', prompt: 'p', chooser: undefined }, { kind: 'number', value: 1 })).toMatch(
+      /expected a "confirm"/,
+    );
+  });
+
+  it('auto-chooses the lowest legal number', () => {
+    expect(autoChoose(request)).toEqual({ kind: 'number', value: 1 });
+  });
+
+  it('is routed through the engine and validated there', async () => {
+    const engine = new GameEngine({ chooser: ScriptedChooser.numbers(4, 9) });
+    expect(await engine.ask(request)).toEqual({ kind: 'number', value: 4 });
+    await expect(engine.ask(request)).rejects.toThrow(/from 1 to 6/);
   });
 });

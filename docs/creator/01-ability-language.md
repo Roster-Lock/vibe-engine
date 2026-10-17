@@ -465,6 +465,128 @@ got redirected.
 A modifier belongs under a `Buff` heading: it is the attachment that
 decides whose actions it rewrites.
 
+## Moving, revealing and scrying cards
+
+```
+Move the top 3 cards from your deck to your hand.
+Move a creature card from your garbage to play.
+Move a random card from target opponent's hand to your stolen zone.
+Move a card castable by target opponent to its owner's garbage.
+Reveal all cards castable by target opponent.
+Scry(you, 3).
+```
+
+`Move <cards> from <zone> to <zone>.` — **the cards**: `the top card`, `the top 3 cards`,
+`the bottom card`; `a card`, `2 cards` (the caster picks); `a random card`; `all cards`;
+`creature` or `spell` may go before `card`. **A zone** is `your hand`, `its owner's garbage`
+(or `their`), `target opponent's hand`, `each opponent's hand`, `each player's hand`, or a
+shared zone written bare (`play`, `the stack`). A custom zone takes `zone` after it.
+
+- **Some zones only hold their owner's cards.** A hand, a deck and a garbage refuse a card
+  that belongs to someone else, so you cannot move an opponent's card to your hand. Thoughtsteal
+  moves it to a zone made for the purpose (`your stolen zone`): only you see it, and you may
+  cast from it. When it is spent it goes to its **owner's** garbage.
+- `castable by <player>` replaces `from <zone>`: everything that player could cast now,
+  wherever it is.
+- A card moved from the stack to `play` takes its stack object with it, so it does not
+  resolve; `When this enters play from stack` fires.
+- `Scry(player, X)`: the player looks at the top X cards of their deck, puts any number on the
+  bottom, and puts the rest back on top in the order they choose.
+- **The generic form of Scry**: `Move any number of the top 3 cards from your deck to the bottom of
+  your deck and the rest on the top of your deck in the order of your choice.` `any number of`
+  names a pool and you pick from it; `the top of` / `the bottom of` place the cards in an ordered
+  zone; `in the order of your choice` lets you order them; `and the rest …` places the ones you did
+  not pick.
+- `Surveil(player, X)`: the same, but the cards not kept go to the player's garbage instead of the bottom.
+
+## Temporary zones and piles
+
+```
+Move the top 5 cards from your deck to the temporary zone Pool.
+Reveal all cards from Pool.
+Target opponent separates Pool into Fact and Fiction.
+You choose Fact or Fiction.
+Move all cards from the chosen pile to your hand.
+Move all cards from the other pile to your garbage.
+```
+
+A temporary zone is made where it is first named (`the temporary zone Pool`) and gone when the
+card finishes resolving; anything still in it goes to its owner's garbage. `separates` has the
+named player pick which cards make the first pile (the rest make the second). `the chosen pile` and
+`the other pile` are the two piles of the last `You choose …`. "Target opponent" is one player for
+the whole card.
+
+## Counters, declared zones, and Suspend
+
+```
+Zone Suspend (per-player, public)
+At the start of your turn, remove a counter from all cards in this zone.
+At the start of your turn, cast all cards with no counters from this zone without paying their cost.
+
+Card Ancestral Vision
+Cost 6
+Spell
+Draw(you, 3).
+Suspend: Move this card to the Suspend zone with 2 counters on it.
+```
+
+- `Zone <name> (options)` **declares** a zone: `per-player` or `shared`; `public`, `owner` or
+  `hidden`; `ordered`; `owner-only`. Its lines are the zone's standing rules.
+- `Move this card to the Suspend zone with 2 counters on it.` puts counters on a card;
+  `Remove a counter from <cards> in <zone>.`; `all cards with no counters`.
+- `<Name>: <sentence>` on a card is an ability the card has while it is in its owner's hand.
+- `Cast <cards> from <zone> without paying their cost.` casts cards for the zone's owner.
+
+## Contests: winners and losers
+
+A contest is a game played by a **list of players**, stated the way a rulebook states it:
+
+```
+Contest Rock Paper Scissors
+The player count must be 2.
+Players commit an option from "Rock", "Paper" and "Scissors".
+If both players choose the same option, it is a tie.
+If player 1 chooses Rock and player 2 chooses Scissors, player 1 wins and player 2 loses.
+If player 1 chooses Scissors and player 2 chooses Paper, player 1 wins and player 2 loses.
+If player 1 chooses Paper and player 2 chooses Rock, player 1 wins and player 2 loses.
+Otherwise player 2 wins and player 1 loses.
+
+Card Showdown
+Cost 3
+Spell
+You and target opponent play Rock Paper Scissors.
+Draw(the winners, 2).
+Deal 5 damage to all characters owned by the losers.
+```
+
+- **The list:** `You and target opponent play …`, `Each player plays …`, `Each opponent plays …`. "Player 1" is the
+  first of the list. If the contest states a player count the list must match, or the card fails to resolve.
+- **Commit/reveal:** every player commits an option face down and they are turned over together (an invalid
+  option loses the game, as with any commitment). Options are matched exactly, capitals included.
+- **The rules** are read in order and the first that fits decides: a tie (nobody wins or loses), an
+  `If player N chooses X and …, player N wins and player N loses.` rule, or `Otherwise …`.
+- **After it**, `the winners` and `the losers` are the players the rules named
+  (`Draw(the winners, 2).`, `… owned by the losers`).
+
+## Creatures that effects make
+
+```
+Creature Giant Golem 6/6
+Taunt.
+
+Card Golem Gambit
+Cost 3
+Spell
+You and target opponent play Rock Paper Scissors.
+The winners create a Giant Golem.
+```
+
+`Creature <name> <power>/<health>` defines a creature that is not a card: it has no cost and is
+never in a deck. Its lines are a creature's (keywords, `When this dies then …`, the entry
+exceptions). `Create a Giant Golem.` (or `The winners create …`, `Each player creates …`) makes a
+new one in play under each named player's control, and it arrives like any creature, so the rules for
+entering play (summoning sickness) apply.
+
 ## Declaring a buff
 
 ```
@@ -763,6 +885,18 @@ compiles to depends on one thing — whether it picks a target:
   it compiles to an ordinary `zone:changed` trigger, so it fires however
   the creature arrives — played, summoned, or cheated from the stack if
   the effect demands `from stack`.
+
+**The turn a creature enters play.** A standing game rule says a creature cannot act — use an
+ability or attack — the turn it enters play, however it arrived (cast, cheated in, revived).
+A creature card can state exceptions:
+
+| Line | Lets it … |
+| --- | --- |
+| `This can act the turn it enters play.` | do anything |
+| `This can attack the turn it enters play.` | attack (as `Charge.` does) |
+| `This can use <Ability> the turn it enters play.` | use that ability |
+| `This can use any ability the turn it enters play.` | use any ability other than attacking (`This can any ability …` is read the same) |
+| `Creatures you own can act / attack the turn they enter play.` | the same, for every creature you own, while this is in play |
 
 `Buff` sections are still document-level and shared by every card, so a
 card's `Add <buff>` resolves against them.
