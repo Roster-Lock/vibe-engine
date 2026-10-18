@@ -26,7 +26,7 @@ wrapper is thin on purpose: a card's effect *is* its engine `cast`, so
 authored content runs the identical action pipeline as the catalog.
 
 The card language names its events — `When this enters play from active
-then …`, `When this dies then …` — and there is no card-only shorthand; see
+then …`, `When this is destroyed then …` — and there is no card-only shorthand; see
 `docs/creator/01-ability-language.md`.
 
 ## Entering play is a zone change

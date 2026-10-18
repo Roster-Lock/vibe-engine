@@ -37,7 +37,7 @@ export type MathContext = Readonly<Record<string, unknown>>;
  * (`this.hp`, `count`, `roll.total`). Any other bare name in a formula is a
  * variable the author stored with "Store … as <Name>."
  */
-export const MATH_ROOTS: readonly string[] = ['this', 'subject', 'subjects', 'sources', 'count', 'roll', 'votes'];
+export const MATH_ROOTS: readonly string[] = ['this', 'subject', 'subjects', 'sources', 'count', 'roll', 'votes', 'vote'];
 
 type MathToken = { kind: 'number' | 'word' | 'operator' | 'eof'; text: string };
 

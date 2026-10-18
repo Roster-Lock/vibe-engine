@@ -117,7 +117,7 @@ it is not, so there is no toggle state to keep anywhere.
 
 ```
 Buff Immolation Aura
-when the turn starts, deal 2 damage to all enemy characters.
+when a turn starts then deal 2 damage to all enemy characters.
 
 Ability Immolation
 Toggle Immolation Aura.
@@ -137,7 +137,7 @@ a toggle; a group toggle therefore does opposite things to two entities in
 the same effect.
 
 Worth noting what the buff then buys for free: WC3's immolation drains
-mana while active, which is a `when the turn starts` trigger on that buff —
+mana while active, which is a `when a turn starts then` trigger on that buff —
 already expressible, and tested. And a toggle that should switch itself off
 when the mana runs out is a `GaugeBuffGate`, which the engine already has.
 

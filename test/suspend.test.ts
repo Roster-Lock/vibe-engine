@@ -2,8 +2,8 @@
  * Counters, declared zones, and Suspend — written entirely in English:
  *
  *   Zone Suspend (per-player, public)
- *   At the start of your turn, remove a counter from all cards in this zone.
- *   At the start of your turn, cast all cards with no counters from this zone without paying their cost.
+ *   When your turn starts then remove a counter from all cards in this zone.
+ *   When your turn starts then cast all cards with no counters from this zone without paying their cost.
  *
  *   Card Ancestral Vision
  *   ...
@@ -18,14 +18,13 @@ import { lowerDocument, parseDocument, renderDocument } from '../src/english/ind
 import { ZoneDictionary } from '../src/english/zone-dictionary.js';
 
 const DOCUMENT = `Zone Suspend (per-player, public)
-At the start of your turn, remove a counter from all cards in this zone.
-At the start of your turn, cast all cards with no counters from this zone without paying their cost.
+When your turn starts then remove a counter from all cards in this zone.
+When your turn starts then cast all cards with no counters from this zone without paying their cost.
 
 Card Ancestral Vision
-Cost 6
-Spell
+{ "cost": 6, "type": "spell" }
 Draw(you, 3).
-Suspend: Move this card to the Suspend zone with 2 counters on it.`;
+Suspend: Move this to the Suspend zone with 2 counters on it.`;
 
 class Idle extends CardPlayer {
   async chooseMove(): Promise<Move> {
@@ -38,8 +37,8 @@ const lower = (text: string) => lowerDocument(parseDocument(text, { zones: new Z
 describe('counters and declared zones — the language', () => {
   it('round-trips the sentences', () => {
     const source = `Ability A
-Move this card to the Suspend zone with 5 counters on it.
-Move this card to the Suspend zone with 3 time counters on it.
+Move this to the Suspend zone with 5 counters on it.
+Move this to the Suspend zone with 3 time counters on it.
 Remove a counter from all cards in this zone.
 Remove 2 time counters from the top card in your hand.
 Cast all cards with no counters from this zone without paying their cost.`;

@@ -31,7 +31,7 @@ const names = (arena: Arena): string[] => arena.hero.statuses.map((status) => st
 describe('Toggle', () => {
   const IMMOLATION = `
     Buff Immolation Aura
-    when the turn starts, deal 2 damage to all enemy characters.
+    when a turn starts then deal 2 damage to all enemy characters.
 
     Ability Immolation
     Toggle Immolation Aura.

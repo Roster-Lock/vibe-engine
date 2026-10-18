@@ -236,7 +236,7 @@ describe('card game — acting the turn a creature enters play', () => {
   };
 
   it('"This can act the turn it enters play" lets it attack at once', async () => {
-    const { game, a, card } = await arrive('Card Quick\nCost 1\nCreature 2/2\nThis can act the turn it enters play.');
+    const { game, a, card } = await arrive('Card Quick\n{ "cost": 1, "type": "creature", "creatureConfig": { "power": 2, "health": 2 } }\nThis can act the turn it enters play.');
     a.script(play(card));
     await turn(game);
     const creature = game.sideOf(a).board[0]!;
@@ -244,21 +244,21 @@ describe('card game — acting the turn a creature enters play', () => {
   });
 
   it('"This can attack the turn it enters play" does too', async () => {
-    const { game, a, card } = await arrive('Card Rusher\nCost 1\nCreature 2/2\nThis can attack the turn it enters play.');
+    const { game, a, card } = await arrive('Card Rusher\n{ "cost": 1, "type": "creature", "creatureConfig": { "power": 2, "health": 2 } }\nThis can attack the turn it enters play.');
     a.script(play(card));
     await turn(game);
     expect(game.readyAttackers(game.sideOf(a))).toContain(game.sideOf(a).board[0]!);
   });
 
   it('"This can use any ability" does not let it attack (attacking has its own line)', async () => {
-    const { game, a, card } = await arrive('Card Tinker\nCost 1\nCreature 2/2\nThis can use any ability the turn it enters play.');
+    const { game, a, card } = await arrive('Card Tinker\n{ "cost": 1, "type": "creature", "creatureConfig": { "power": 2, "health": 2 } }\nThis can use any ability the turn it enters play.');
     a.script(play(card));
     await turn(game);
     expect(game.readyAttackers(game.sideOf(a))).toHaveLength(0);
   });
 
   it('"Creatures you own can attack the turn they enter play" frees every creature you own while it is in play', async () => {
-    const { game, a, card } = await arrive('Card Warchief\nCost 1\nCreature 1/3\nCreatures you own can attack the turn they enter play.');
+    const { game, a, card } = await arrive('Card Warchief\n{ "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 3 } }\nCreatures you own can attack the turn they enter play.');
     a.script(play(card), play(card));
     await turn(game);
     const board = game.sideOf(a).board;

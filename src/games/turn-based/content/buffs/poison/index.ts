@@ -16,7 +16,6 @@ export const poison = buff({
   name: 'Poison',
   icon,
   weight: 1,
-  stacks: true,
   abilities: [
     auto({
       name: 'Poison Tick',

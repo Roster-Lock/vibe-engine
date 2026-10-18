@@ -132,13 +132,13 @@ export interface ZoneBinding {
   /** The zone, as the document wrote it. */
   readonly zone: string;
   /**
-   * Runs the section for each instance of the zone — each player's, for a per-player
+   * Runs the section for each instance of the zone — all players', for a per-player
    * zone — with that instance's owner as "you". Safe to call again: it sets the same
    * state.
    */
   apply(engine: GameEngine): Promise<void>;
   /**
-   * Runs the zone's standing rules for `event` (`At the start of your turn, …` is `turn:start`).
+   * Runs the zone's standing rules for `event` (`When your turn starts then …` is `turn:start`).
    * A rule that says "your" runs only for the instance `turnOwner` owns.
    */
   trigger(event: string, engine: GameEngine, turnOwner: Player | undefined): Promise<void>;
@@ -251,6 +251,8 @@ interface RoundState {
   readonly secret: boolean;
   /** True for a vote — a round over labelled options, whose answers `votes` counts. */
   readonly label: boolean;
+  /** The names on the ballot of a vote — every one has a tally, even 0. */
+  readonly options?: readonly string[];
 }
 
 /** The votes cast for each option in the most recent vote; empty when there is none. */
@@ -262,10 +264,18 @@ function tallyOf(ctx: ResolveContext): Map<string, number> {
   if (!latest.round.revealed) {
     throw new Error('the votes are still sealed — reveal them before counting');
   }
+  for (const option of latest.options ?? []) counts.set(option, 0);
   for (const { answer } of latest.round.answers) {
     if (answer.kind === 'label') counts.set(answer.value, (counts.get(answer.value) ?? 0) + 1);
   }
   return counts;
+}
+
+/** The most (or fewest) votes any option on the ballot got; 0 when there is no vote. */
+function voteStatOf(ctx: ResolveContext, stat: 'highest' | 'lowest'): number {
+  const counts = [...tallyOf(ctx).values()];
+  if (counts.length === 0) return 0;
+  return stat === 'highest' ? Math.max(...counts) : Math.min(...counts);
 }
 
 /** The entities a triggering event bound, by role. */
@@ -333,6 +343,8 @@ function valueOf(value: ValueIR, ctx: ResolveContext, options: BindOptions): num
       return ctx.variables?.get(value.name) ?? 0;
     case 'votes':
       return tallyOf(ctx).get(value.option) ?? 0;
+    case 'voteStat':
+      return voteStatOf(ctx, value.stat);
     case 'count':
       return resolveQuery(value.query, ctx, options).length;
     case 'gauge': {
@@ -366,6 +378,10 @@ function valueOf(value: ValueIR, ctx: ResolveContext, options: BindOptions): num
         },
         // `votes.Attack` — the latest vote's tally (empty before one is held).
         votes: Object.fromEntries(ctx.rounds && [...ctx.rounds.values()].some((s) => s.label) ? tallyOf(ctx) : []),
+        vote: {
+          highest: ctx.rounds && [...ctx.rounds.values()].some((s) => s.label) ? voteStatOf(ctx, 'highest') : 0,
+          lowest: ctx.rounds && [...ctx.rounds.values()].some((s) => s.label) ? voteStatOf(ctx, 'lowest') : 0,
+        },
         // Stored values are plain names in a formula: `(AttackerRoll * 2)`.
         ...Object.fromEntries(ctx.variables ?? []),
       }, { step: () => ctx.engine.gas.spend('math') });
@@ -826,7 +842,7 @@ interface CardGroup {
   readonly members: readonly Entity[];
   /** Whose zone it is — where "its owner's" sends them, unless the cards say otherwise. */
   readonly owner: Player | undefined;
-  /** The player this group belongs to, to pair with "each opponent's … to each opponent's …". */
+  /** The player this group belongs to, to pair with "all opponents' … to all opponents' …". */
   readonly player: Player | undefined;
 }
 
@@ -868,7 +884,7 @@ async function groupsOf(
  * names), every `opponents`, or `each` player; `shared` is a zone nobody owns; or the
  * cards a player could cast. The destination is one zone, or `owner` (each card back to
  * its own owner's — the card's, when it says whose it is, else the zone's), or — when both
- * ends say the same many-player thing ("each opponent's … to each opponent's …") — the
+ * ends say the same many-player thing ("all opponents' … to all opponents' …") — the
  * same player's.
  */
 async function moveCardsActions(
@@ -879,7 +895,7 @@ async function moveCardsActions(
 ): Promise<Action[]> {
   const fromWhose = 'castableBy' in effect.from ? effect.from.castableBy : effect.from.whose;
   // Who a destination zone belongs to: its owner's (the card's), the same many-player
-  // thing as the source (each opponent's … to each opponent's …), or one named player.
+  // thing as the source (all opponents' … to all opponents' …), or one named player.
   const named = new Map<string, Player | undefined>();
   for (const ref of [effect.to, ...(effect.rest ? [effect.rest.to] : [])]) {
     const many = (ref.whose === 'each' || ref.whose === 'opponents') && ref.whose === fromWhose;
@@ -1086,7 +1102,7 @@ async function roundEffectActions(
       // A shared zone has no owner, so "you" and "each opponent" would mean nobody.
       if (!here.owner && effect.users !== 'each') {
         throw new Error(
-          `"${prompt}": the "${here.id}" zone is shared, so it has no owner — say "for each player"`,
+          `"${prompt}": the "${here.id}" zone is shared, so it has no owner — say "for all players"`,
         );
       }
       if (effect.remove) ctx.engine.removeZoneAbility(here, ability);
@@ -1108,7 +1124,7 @@ async function roundEffectActions(
   if (effect.kind === 'revealCard' || effect.kind === 'castCard' || effect.kind === 'moveCard') {
     const host = ctx.host;
     if (!host) {
-      throw new Error(`"${prompt}": "this card" needs an ability a zone or an effect gave a card — this one belongs to a character`);
+      throw new Error(`"${prompt}": "this" needs an ability a zone or an effect gave a card — this one belongs to a character`);
     }
     // The owner of the pile the card is in: where "its owner's garbage" is.
     const owner = ctx.engine.zones.zoneOf(host)?.owner;
@@ -1155,7 +1171,7 @@ async function roundEffectActions(
       players.map((player): ChoiceRequest => ({ kind: 'label', prompt, chooser: player, options: [...contest.options] })),
       { sealed: true },
     );
-    ctx.rounds.set('contest', { round, secret: true, label: true });
+    ctx.rounds.set('contest', { round, secret: true, label: true, options: contest.options });
     // A commitment that is invalid or changed loses the game for that player.
     const forfeited = await ctx.engine.revealRound(round);
     const chosen = new Map<Player, string>();
@@ -1300,7 +1316,12 @@ async function roundEffectActions(
       }
     }
     const round = await ctx.engine.askAll(requests, { sealed: effect.secret });
-    ctx.rounds.set(effect.round, { round, secret: effect.secret, label: effect.pick.kind === 'label' });
+    ctx.rounds.set(effect.round, {
+      round,
+      secret: effect.secret,
+      label: effect.pick.kind === 'label',
+      ...(effect.pick.kind === 'label' ? { options: effect.pick.options } : {}),
+    });
     return [];
   }
   if (effect.kind === 'reveal') {
@@ -1701,7 +1722,7 @@ function sourceTypeOf(ir: TriggerIR): 'character' | 'buff' {
  * zones and players to exist, and it runs once per instance of the zone.
  */
 function bindZone(ir: ZoneSectionIR, options: BindOptions): ZoneBinding {
-  /** Runs `steps` once for each instance of the zone (each player's, if per-player), with its owner as "you". */
+  /** Runs `steps` once for each instance of the zone (all players', if per-player), with its owner as "you". */
   const run = async (
     engine: GameEngine,
     steps: readonly StepIR[],
@@ -1802,7 +1823,7 @@ export function bindTrigger(ir: TriggerIR, options: BindOptions): AnyTriggeredAb
       target?: unknown;
     };
     if (ir.gauge !== undefined) {
-      // `takes damage` watches the life gauge of whoever took it, read
+      // `is damaged` watches the life gauge of whoever took it, read
       // from that entity's own declaration — so the same trigger fires on
       // hp for a fighter and `loyalty` for a planeswalker. A named gauge
       // needs no entity.
@@ -2084,50 +2105,37 @@ function rescaleOf(op: 'add' | 'subtract' | 'multiply' | 'cap', operand: number)
 export function bindBuff(ir: BuffIR, options: BindOptions): BuffDef {
   const abilities: Ability[] = ir.triggers.map((trigger) => bindTrigger(trigger, options));
   for (const modifier of ir.modifiers ?? []) abilities.push(bindModifier(modifier, options));
-  const expiry = ir.duration ? expiryAbility(ir) : undefined;
+  const expiry = ir.fading !== undefined ? fadingAbility(ir, ir.fading) : undefined;
   if (expiry) abilities.push(expiry);
   return makeBuff({
     id: ir.id,
     name: ir.name,
     weight: ir.weight,
-    ...(ir.stacks ? { stacks: true } : {}),
-    ...(ir.duration?.kind === 'turns' && ir.duration.count > 1
-      ? { variables: () => ({ turnsLeft: (ir.duration as { count: number }).count }) }
-      : {}),
+    ...(ir.fading !== undefined ? { variables: () => ({ counters: ir.fading }) } : {}),
     ...(abilities.length > 0 ? { abilities } : {}),
   });
 }
 
 /**
- * A duration as an ordinary triggered ability: at the end of a turn, the
- * buff takes itself off.
+ * Fading as an ordinary triggered ability: at the end of a turn the buff
+ * removes one of its counters, and if it cannot, it takes itself off.
  *
  * The engine needs no concept of expiry for this — a buff is already a
- * bundle of abilities, and one of them removing the buff is all "until end
- * of turn" means. For a multi-turn duration the countdown lives in the
- * instance's own `vars`, so each stack expires on its own schedule.
+ * bundle of abilities. The counters live in the instance's own `vars`, so each
+ * instance fades on its own schedule: `fading 0` goes at the first turn end,
+ * `fading 1` survives it and goes at the second.
  */
-function expiryAbility(ir: BuffIR): Ability {
-  const duration = ir.duration!;
-  const turns = duration.kind === 'turns' ? duration.count : 1;
-  if (turns <= 1) {
-    return auto({
-      id: `${ir.id}-expiry`,
-      name: `${ir.name} expires`,
-      event: 'turn:end',
-      targets: () => [],
-      cast: (ctx): Action[] => [removeBuff(ctx.self, ir.id, ctx.self)],
-    });
-  }
+function fadingAbility(ir: BuffIR, counters: number): Ability {
   return auto({
-    id: `${ir.id}-expiry`,
-    name: `${ir.name} expires`,
+    id: `${ir.id}-fading`,
+    name: `${ir.name} fades`,
     event: 'turn:end',
     targets: () => [],
     cast: (ctx): Action[] => {
-      const left = Number(ctx.status.vars.turnsLeft ?? turns) - 1;
-      ctx.status.vars.turnsLeft = left;
-      return left <= 0 ? [removeBuff(ctx.self, ir.id, ctx.self)] : [];
+      const left = Number(ctx.status.vars.counters ?? counters);
+      if (left <= 0) return [removeBuff(ctx.self, ir.id, ctx.self)];
+      ctx.status.vars.counters = left - 1;
+      return [];
     },
   });
 }

@@ -112,19 +112,19 @@ describe('Draw(player, count) in English', () => {
     expect(names('hand', players[1]!)).toEqual([]);
   });
 
-  it('draws for each player, and for each opponent', async () => {
-    const all = await play('Ability Study\nDraw(each player, 1).');
+  it('draws for all players, and for all opponents', async () => {
+    const all = await play('Ability Study\nDraw(all players, 1).');
     expect(all.names('hand', all.players[0]!)).toEqual(['c1']);
     expect(all.names('hand', all.players[1]!)).toEqual(['c1']);
-    const others = await play('Ability Study\nDraw(each opponent, 2).');
+    const others = await play('Ability Study\nDraw(all opponents, 2).');
     expect(others.names('hand', others.players[0]!)).toEqual([]);
     expect(others.names('hand', others.players[1]!)).toEqual(['c1', 'c2']);
   });
 
   it('takes any amount: a roll, or a stored value', async () => {
-    const rolled = await play('Ability Study\nRoll a d6.\nDraw(you, that total).');
+    const rolled = await play('Ability Study\nRoll a d6.\nDraw(you, that value).');
     expect(rolled.names('hand', rolled.players[0]!)).toEqual(['c1', 'c2', 'c3']); // the roller answers 3
-    const stored = await play('Ability Study\nRoll a d6.\nStore that value as Pages.\nDraw(each opponent, Pages).');
+    const stored = await play('Ability Study\nRoll a d6.\nStore that value as Pages.\nDraw(all opponents, Pages).');
     expect(stored.names('hand', stored.players[1]!)).toEqual(['c1', 'c2', 'c3']);
   });
 
@@ -151,17 +151,17 @@ describe('Draw(player, count) in English', () => {
     const message = (text: string) => compileDocument(text, { zones: ZONES }).diagnostics[0]?.message ?? '';
     expect(message('Ability A\nDraw.')).toMatch(/takes a player and a number.*Draw\(you, 2\)/);
     expect(message('Ability A\nDraw(you).')).toMatch(/needs a number after the player/);
-    expect(message('Ability A\nDraw(everyone, 2).')).toMatch(/"you", "each player" or "each opponent"/);
-    expect(message('Ability A\nDraw(each cat, 2).')).toMatch(/"each" is followed by "player" or "opponent"/);
+    expect(message('Ability A\nDraw(everyone, 2).')).toMatch(/"you", "all players" or "all opponents"/);
+    expect(message('Ability A\nDraw(each cat, 2).')).toMatch(/"all" is followed by|the player is "you"/);
     expect(message('Ability A\nDraw(you, 2.')).toMatch(/expected "\)"/);
     expect(message('Ability A\nDraw(you, Nothing).')).toMatch(/"Nothing" has not been stored/);
     // The old order is named, not reported as a stray word.
     expect(message('Ability A\nDraw(2, you).')).toMatch(/the player comes first/);
-    expect(message('Ability A\nDraw(that total, you).')).toMatch(/the player comes first/);
+    expect(message('Ability A\nDraw(that value, you).')).toMatch(/the player comes first/);
   });
 
   it('round-trips through the IR and renders as the function call', () => {
-    const source = 'Ability Study\nDraw(you, 2).\nDraw(each player, 1).\nDraw(each opponent, 3).';
+    const source = 'Ability Study\nDraw(you, 2).\nDraw(all players, 1).\nDraw(all opponents, 3).';
     const ir = lowerDocument(parseDocument(source, { zones: ZONES }).doc);
     expect(ir.abilities[0]!.steps.map((step) => step.effects[0])).toEqual([
       { kind: 'draw', count: { kind: 'const', value: 2 }, players: 'you' },
@@ -171,8 +171,8 @@ describe('Draw(player, count) in English', () => {
     const { text, gaps } = renderDocument(ir);
     expect(gaps).toEqual([]);
     expect(text).toContain('Draw(you, 2).');
-    expect(text).toContain('Draw(each player, 1).');
-    expect(text).toContain('Draw(each opponent, 3).');
+    expect(text).toContain('Draw(all players, 1).');
+    expect(text).toContain('Draw(all opponents, 3).');
     expect(lowerDocument(parseDocument(text, { zones: ZONES }).doc).abilities[0]!.steps).toEqual(ir.abilities[0]!.steps);
   });
 });

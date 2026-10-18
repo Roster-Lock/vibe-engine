@@ -51,7 +51,7 @@ async function turn(game: CardGame): Promise<void> {
 describe('authored cards — conversion', () => {
   it('turns a creature card into a playable stat line with its keyword', () => {
     const { cards, diagnostics } = playableCards(
-      ['Card Test Bulwark', 'Cost 2', 'Creature 2/5', 'Taunt.'].join('\n'),
+      ['Card Test Bulwark', '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 2, "health": 5 } }', 'Taunt.'].join('\n'),
     );
     expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     const card = cards[0]!;
@@ -65,7 +65,7 @@ describe('authored cards — conversion', () => {
 
   it('gives an enters-play creature an onPlay with a targeting pattern', () => {
     const { cards } = playableCards(
-      ['Card Test Archer', 'Cost 1', 'Creature 1/1', 'When this enters play then Deal 1 damage to target enemy character.'].join('\n'),
+      ['Card Test Archer', '{ "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }', 'When this enters play then Deal 1 damage to target enemy character.'].join('\n'),
     );
     const card = cards[0]!;
     if (card.kind !== 'creature') throw new Error('expected a creature');
@@ -75,7 +75,7 @@ describe('authored cards — conversion', () => {
 
   it('leaves an untargeted effect without a targeting pattern', () => {
     const { cards } = playableCards(
-      ['Card Test Wave', 'Cost 2', 'Spell', 'Deal 2 damage to all enemy characters.'].join('\n'),
+      ['Card Test Wave', '{ "cost": 2, "type": "spell" }', 'Deal 2 damage to all enemy characters.'].join('\n'),
     );
     const card = cards[0]!;
     if (card.kind !== 'spell') throw new Error('expected a spell');
@@ -83,7 +83,7 @@ describe('authored cards — conversion', () => {
   });
 
   it('keeps the id slug so a card named Fireball is still a fireball', () => {
-    const { cards } = playableCards(['Card Fireball', 'Cost 1', 'Spell', 'Deal 6 damage to target enemy character.'].join('\n'));
+    const { cards } = playableCards(['Card Fireball', '{ "cost": 1, "type": "spell" }', 'Deal 6 damage to target enemy character.'].join('\n'));
     expect(cards[0]!.id).toBe('authored-fireball');
   });
 });
@@ -91,7 +91,7 @@ describe('authored cards — conversion', () => {
 describe('authored cards — playing them', () => {
   it('deals an authored spell’s damage through the engine', async () => {
     const { cards } = playableCards(
-      ['Card Test Bolt', 'Cost 1', 'Spell', 'Deal 6 damage to target enemy character.'].join('\n'),
+      ['Card Test Bolt', '{ "cost": 1, "type": "spell" }', 'Deal 6 damage to target enemy character.'].join('\n'),
     );
     const bolt = cards[0]!;
     const alice = new ScriptedCardPlayer('Alice', 'a', deckOf(bolt));
@@ -108,7 +108,7 @@ describe('authored cards — playing them', () => {
 
   it('draws through the game\'s own rules: Draw(you, 2) fills the hand', async () => {
     const { cards, diagnostics } = playableCards(
-      ['Card Test Study', 'Cost 1', 'Spell', 'Draw(you, 2).'].join('\n'),
+      ['Card Test Study', '{ "cost": 1, "type": "spell" }', 'Draw(you, 2).'].join('\n'),
     );
     expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     const study = cards[0]!;
@@ -131,7 +131,7 @@ describe('authored cards — playing them', () => {
   });
 
   it('burns a drawn card past ten, and fatigues an empty deck, just like the rule draw', async () => {
-    const { cards } = playableCards(['Card Test Study', 'Cost 0', 'Spell', 'Draw(you, 9).'].join('\n'));
+    const { cards } = playableCards(['Card Test Study', '{ "cost": 0, "type": "spell" }', 'Draw(you, 9).'].join('\n'));
     const study = cards[0]!;
     const alice = new ScriptedCardPlayer('Alice', 'a', deckOf(study));
     const bob = new ScriptedCardPlayer('Bob', 'b', deckOf(study));
@@ -147,7 +147,7 @@ describe('authored cards — playing them', () => {
 
   it('runs an enters-play effect the moment the creature lands', async () => {
     const { cards } = playableCards(
-      ['Card Test Archer', 'Cost 1', 'Creature 1/1', 'When this enters play then Deal 1 damage to target enemy character.'].join('\n'),
+      ['Card Test Archer', '{ "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }', 'When this enters play then Deal 1 damage to target enemy character.'].join('\n'),
     );
     const archer = cards[0]!;
     const alice = new ScriptedCardPlayer('Alice', 'a', deckOf(archer));
@@ -166,7 +166,7 @@ describe('authored cards — playing them', () => {
 
   it('honours an authored Taunt restriction', async () => {
     const { cards } = playableCards(
-      ['Card Test Bulwark', 'Cost 1', 'Creature 1/4', 'Taunt.'].join('\n'),
+      ['Card Test Bulwark', '{ "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 4 } }', 'Taunt.'].join('\n'),
     );
     const bulwark = cards[0]!;
     const attackerCard = WISP;
@@ -192,12 +192,11 @@ describe('authored cards — playing them', () => {
   it('plays a document’s buff with its card', async () => {
     const { cards, diagnostics } = playableCards(
       [
-        'Buff Test Venom (stacks)',
+        'Buff Test Venom',
         'Incoming damage is reduced by 1.',
         '',
         'Card Test Coating',
-        'Cost 1',
-        'Spell',
+        '{ "cost": 1, "type": "spell" }',
         'Add Test Venom to this.',
       ].join('\n'),
     );
@@ -216,7 +215,7 @@ describe('authored cards — playing them', () => {
 
   it('enters play from active, so the `from active` clause is real', async () => {
     const { cards, diagnostics } = playableCards(
-      ['Card Test Bulwark', 'Cost 1', 'Creature 1/4', 'When this enters play from active then Heal this for 1.'].join('\n'),
+      ['Card Test Bulwark', '{ "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 4 } }', 'When this enters play from active then Heal this for 1.'].join('\n'),
     );
     expect(diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     const bulwark = cards[0]!;
@@ -258,7 +257,7 @@ describe('authored cards — playing them', () => {
 
   it('fires a targetless arrival effect from the normal cast path', async () => {
     const { cards } = playableCards(
-      ['Card Test Wave', 'Cost 1', 'Creature 1/1', 'When this enters play from active then Deal 2 damage to all enemy characters.'].join('\n'),
+      ['Card Test Wave', '{ "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }', 'When this enters play from active then Deal 2 damage to all enemy characters.'].join('\n'),
     );
     const wave = cards[0]!;
     const alice = new ScriptedCardPlayer('Alice', 'a', deckOf(wave));
@@ -276,7 +275,7 @@ describe('authored cards — playing them', () => {
 
   it('does not fire an arrival effect that insists on the stack', async () => {
     const { cards } = playableCards(
-      ['Card Test Wave', 'Cost 1', 'Creature 1/1', 'When this enters play from stack then Deal 2 damage to all enemy characters.'].join('\n'),
+      ['Card Test Wave', '{ "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }', 'When this enters play from stack then Deal 2 damage to all enemy characters.'].join('\n'),
     );
     const wave = cards[0]!;
     const alice = new ScriptedCardPlayer('Alice', 'a', deckOf(wave));
@@ -309,8 +308,8 @@ describe('authored cards — playing them', () => {
 
 describe('the Boxed Present, in the real game', () => {
   const OPEN_PRESENT = `Ability Open Present
-Reveal this card.
-Cast this card if you can, otherwise move it to its owner's garbage.`;
+Reveal this.
+Cast this if you can, otherwise move it to its owner's garbage.`;
 
   /** Alice, on her first turn, with one card of her hand wrapped in her `boxed` zone. */
   async function wrapped(card: Card) {
@@ -340,7 +339,7 @@ Cast this card if you can, otherwise move it to its owner's garbage.`;
   });
 
   it('a card too expensive to cast goes to its owner\'s garbage instead', async () => {
-    const { cards } = playableCards(['Card Test Giant', 'Cost 9', 'Creature 9/9'].join('\n'));
+    const { cards } = playableCards(['Card Test Giant', '{ "cost": 9, "type": "creature", "creatureConfig": { "power": 9, "health": 9 } }'].join('\n'));
     const giant = cards[0]!;
     const t = await wrapped(giant);
     await t.game.engine.useCardAbility(t.alice, t.present, t.ability);
@@ -351,7 +350,7 @@ Cast this card if you can, otherwise move it to its owner's garbage.`;
   });
 
   it('asks the caster for a target when the card needs one, like a cast from the hand', async () => {
-    const { cards } = playableCards(['Card Test Bolt', 'Cost 1', 'Spell', 'Deal 6 damage to target enemy character.'].join('\n'));
+    const { cards } = playableCards(['Card Test Bolt', '{ "cost": 1, "type": "spell" }', 'Deal 6 damage to target enemy character.'].join('\n'));
     const bolt = cards[0]!;
     const t = await wrapped(bolt);
     const bobHero = t.game.sideOf(t.bob).hero;
@@ -364,8 +363,8 @@ Cast this card if you can, otherwise move it to its owner's garbage.`;
 
 describe('opening a present as a move of the turn', () => {
   const DOC = `Ability Open Present
-Reveal this card.
-Cast this card if you can, otherwise move it to its owner's garbage.
+Reveal this.
+Cast this if you can, otherwise move it to its owner's garbage.
 
 Ability Wrap Presents
 Cards in your boxed zone have Open Present for you.`;

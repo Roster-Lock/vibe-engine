@@ -103,10 +103,10 @@ export function describeBuffReference(info: BuffReferenceInfo): string {
     const section = info.section;
     const options = [
       `weight ${section.weight}`,
-      ...(section.stacks ? ['stackable'] : []),
+      ...(section.fading !== undefined ? [`Fading ${section.fading}`] : []),
     ].join(', ');
     const eventLabel = (ev: string): string =>
-      ev === 'turn:start' ? 'when the turn starts' : ev === 'turn:end' ? 'when the turn ends' : ev;
+      ev === 'turn:start' ? 'when a turn starts' : ev === 'turn:end' ? 'when a turn ends' : ev;
     const effectDescs = section.sentences.map((s) => s.event ? `[${eventLabel(s.event)}] ${effectSummary(s)}` : effectSummary(s)).join('\n');
     return (
       `**${section.name}** — declared in this document\n\n` +
@@ -123,7 +123,6 @@ export function describeEngineBuff(def: BuffDef): string {
   const lines: string[] = [`**${def.name}** — built-in or host-supplied buff`];
   if (def.description) lines.push(`> ${def.description}`);
   const facts: string[] = [`weight ${def.weight}`];
-  if (def.stacks) facts.push('stackable');
   if (def.removable === false) facts.push('not removable');
   if (def.removedOnDefeat === false) facts.push('survives its wearer');
   lines.push(`_${facts.join(', ')}_`);

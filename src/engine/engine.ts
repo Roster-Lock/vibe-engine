@@ -463,7 +463,7 @@ export class GameEngine {
 
   /**
    * **Adds one ability to a zone's cards**, for some players — "Cards in your
-   * boxed zone have Open Present for each opponent." Unlike `setZoneAbilities` it
+   * boxed zone have Open Present for all opponents." Unlike `setZoneAbilities` it
    * keeps what the zone already gives. Giving the same ability again (same `id`) replaces who
    * may use it rather than listing it twice.
    */

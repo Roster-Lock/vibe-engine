@@ -158,8 +158,6 @@ export interface StatusDef {
 /* ------------------------------- Buff ------------------------------- */
 
 export interface BuffDef extends StatusDef {
-  /** When `true`, more than one instance of this buff may stack. Defaults to `false`. */
-  readonly stacks?: boolean;
   /**
    * Whether the buff can be removed once applied. When `false` the buff can
    * still be **added** at runtime (e.g. by an aura), but any removal is a

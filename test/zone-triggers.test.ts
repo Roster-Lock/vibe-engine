@@ -87,7 +87,7 @@ describe('zone triggers — the phrase compiles', () => {
   });
 
   it('accepts the plural verb forms for a batch', () => {
-    const result = compileDocument(`Ability T\nWhen 2 or more characters enter play ${dealFive}`);
+    const result = compileDocument(`Ability T\nWhen 2 or more characters enters play ${dealFive}`);
     expect(result.diagnostics).toEqual([]);
     expect(result.ir.triggers[0]!.event).toBe('zone:changed:batch');
     expect(result.ir.triggers[0]!.mode).toBe('batch');
@@ -135,7 +135,7 @@ describe('zone triggers — completion', () => {
     const labels = at('Ability T\nWhen this ');
     expect(labels).toContain('enters');
     expect(labels).toContain('leaves');
-    expect(labels).toContain('dies');
+    expect(labels).toContain('is destroyed');
   });
 
   it('offers zone names after the zone verb', () => {
@@ -233,7 +233,7 @@ describe('zone triggers — firing', () => {
 
   it('counts a batch of arrivals', async () => {
     const { engine, mover, foe } = arena();
-    ally(engine, mover, unit('Watcher', `${WATCH}When 2 or more characters enter play then deal 7 damage to all enemy characters.`, 10));
+    ally(engine, mover, unit('Watcher', `${WATCH}When 2 or more characters enters play then deal 7 damage to all enemy characters.`, 10));
     const a = ally(engine, mover, unit('A', `${WATCH}Ability Noop\nHeal this for 1.`, 5));
     const b = ally(engine, mover, unit('B', `${WATCH}Ability Noop\nHeal this for 1.`, 5));
 

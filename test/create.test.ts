@@ -12,20 +12,21 @@ import { CardPlayer } from '../examples/card-game/ai.js';
 import { WISP } from '../examples/card-game/cards.js';
 import { playableCards } from '../examples/card-game/english.js';
 import { CardGame, type Move } from '../examples/card-game/game.js';
-import { parseContest } from '../src/english/contest.js';
 import { lowerDocument, parseDocument, renderDocument } from '../src/english/index.js';
 import { ZoneDictionary } from '../src/english/zone-dictionary.js';
 
 const RPS = `Contest Rock Paper Scissors
-The player count must be 2.
-Players commit an option from "Rock", "Paper" and "Scissors".
-If both players choose the same option, it is a tie.
-If player 1 chooses Rock and player 2 chooses Scissors, player 1 wins and player 2 loses.
-If player 1 chooses Scissors and player 2 chooses Paper, player 1 wins and player 2 loses.
-If player 1 chooses Paper and player 2 chooses Rock, player 1 wins and player 2 loses.
-Otherwise player 2 wins and player 1 loses.`;
+Players 2.
+All players commit Rock, Paper or Scissors face down.
+When they are ready, reveal.
+If all players committed the same option, it is a tie.
+If player 1 committed Rock and player 2 committed Scissors, player 1 win and player 2 lose.
+If player 1 committed Scissors and player 2 committed Paper, player 1 win and player 2 lose.
+If player 1 committed Paper and player 2 committed Rock, player 1 win and player 2 lose.
+Otherwise player 2 win and player 1 lose.`;
 
-const GOLEM = `Creature Giant Golem 6/6
+const GOLEM = `Creature Giant Golem
+{ "type": "creature", "creatureConfig": { "power": 6, "health": 6 } }
 Taunt.`;
 
 const DOCUMENT = `${GOLEM}
@@ -33,14 +34,12 @@ const DOCUMENT = `${GOLEM}
 ${RPS}
 
 Card Golem Gambit
-Cost 3
-Spell
+{ "cost": 3, "type": "spell" }
 You and target opponent play Rock Paper Scissors.
 The winners create a Giant Golem.
 
 Card Forge
-Cost 5
-Spell
+{ "cost": 5, "type": "spell" }
 Create a Giant Golem.`;
 
 class Idle extends CardPlayer {
@@ -49,7 +48,7 @@ class Idle extends CardPlayer {
   }
 }
 
-const contest = parseContest('Rock Paper Scissors', RPS.split('\n').slice(1).map((text, i) => ({ text, start: i * 100, end: i * 100 + text.length }))).contest!;
+const contest = parseDocument(RPS).doc.contests[0]!.contest!;
 const parse = (text: string) => parseDocument(text, { zones: new ZoneDictionary(['hand']), contests: [contest], creatures: ['Giant Golem'] });
 const lower = (text: string) => lowerDocument(parse(text).doc);
 const errors = (text: string) => parse(text).diagnostics.filter((d) => d.severity === 'error').map((d) => d.message);
@@ -58,15 +57,15 @@ describe('Create — the language', () => {
   it.each([
     ['Create a Giant Golem.', 'you'],
     ['You create a Giant Golem.', 'you'],
-    ['Each player creates a Giant Golem.', 'each'],
-    ['Each opponent creates a Giant Golem.', 'opponents'],
+    ['All players create a Giant Golem.', 'each'],
+    ['All opponents create a Giant Golem.', 'opponents'],
   ])('%s', (sentence, players) => {
     const effect = lower(`Ability A\n${sentence}`).abilities[0]!.steps[0]!.effects[0];
     expect(effect).toEqual({ kind: 'create', players, creature: 'Giant Golem' });
   });
 
   it('the winners and the losers create, after a contest; and it round-trips', () => {
-    const source = 'Ability A\nEach player plays Rock Paper Scissors.\nThe winners create a Giant Golem.\nThe losers create a Giant Golem.';
+    const source = 'Ability A\nAll players play Rock Paper Scissors.\nThe winners create a Giant Golem.\nThe losers create a Giant Golem.';
     const ir = lower(source);
     const { text } = renderDocument(ir);
     expect(text).toContain('The winners create a Giant Golem.');

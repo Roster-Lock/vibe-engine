@@ -24,7 +24,7 @@ describe('Move … from … to … — the language', () => {
     ['Move a creature card from your garbage to play.', { how: 'choose', count: 1, cardKind: 'creature' }, { whose: 'you', zone: 'garbage' }, { whose: 'shared', zone: 'play' }],
     ['Move a random card from target opponent\'s hand to your stolen zone.', { how: 'random', count: 1 }, { whose: 'opponent', zone: 'hand' }, { whose: 'you', zone: 'stolen' }],
     ['Move 2 spell cards from your garbage to your hand.', { how: 'choose', count: 2, cardKind: 'spell' }, { whose: 'you', zone: 'garbage' }, { whose: 'you', zone: 'hand' }],
-    ['Move all cards from each player\'s hand to its owner\'s garbage.', { how: 'all', count: 0 }, { whose: 'each', zone: 'hand' }, { whose: 'owner', zone: 'garbage' }],
+    ['Move all cards from all players\' hand to its owner\'s garbage.', { how: 'all', count: 0 }, { whose: 'each', zone: 'hand' }, { whose: 'owner', zone: 'garbage' }],
   ])('%s', (sentence, select, from, to) => {
     const ir = lower(`Ability A\n${sentence}`);
     expect(ir.abilities[0]!.steps[0]!.effects[0]).toEqual({ kind: 'moveCards', select, from, to });
@@ -41,14 +41,14 @@ describe('Move … from … to … — the language', () => {
   it('says what is wrong', () => {
     expect(errors('Ability A\nMove the top 3 cards to your hand.')[0]).toMatch(/expected "from <zone>"/);
     expect(errors('Ability A\nMove the top 3 cards from your deck.')[0]).toMatch(/expected "to <zone>"/);
-    expect(errors('Ability A\nMove cards from your deck to your hand.')[0]).toMatch(/write "this card"/);
+    expect(errors('Ability A\nMove cards from your deck to your hand.')[0]).toMatch(/write "this"/);
     expect(errors('Ability A\nMove the top 3 cards from your pocket to your hand.')[0]).toMatch(/unknown zone "pocket"/);
     expect(errors("Ability A\nMove a card from its owner's hand to your hand.")[0]).toMatch(/named outright/);
     expect(errors('Ability A\nMove the top 3 cards from your deck to your hand.')).toEqual([]);
   });
 
   it('still reads the older "this card" move', () => {
-    expect(errors("Ability A\nMove this card to its owner's garbage.")).toEqual([]);
+    expect(errors("Ability A\nMove this to its owner's garbage.")).toEqual([]);
   });
 });
 
@@ -82,7 +82,7 @@ describe('Move … from … to … — playing it', () => {
     const { game, alice, a } = await table(WISP);
     const dead = a.hand.cards[0]!;
     await game.engine.moveTo(dead, GARBAGE.id, { owner: alice });
-    await cast('Card Raise Dead\nCost 4\nSpell\nMove a creature card from your garbage to play.', game, alice);
+    await cast('Card Raise Dead\n{ "cost": 4, "type": "spell" }\nMove a creature card from your garbage to play.', game, alice);
     expect(game.engine.zones.zoneOf(dead)?.id).toBe(PLAY.id);
     expect(a.garbage.size).toBe(0);
   });
@@ -91,14 +91,14 @@ describe('Move … from … to … — playing it', () => {
     const { game, alice, a } = await table(WISP);
     const [one] = a.hand.cards;
     await game.engine.moveTo(one!, GARBAGE.id, { owner: alice });
-    await cast('Card Raise Dead\nCost 4\nSpell\nMove a spell card from your garbage to play.', game, alice);
+    await cast('Card Raise Dead\n{ "cost": 4, "type": "spell" }\nMove a spell card from your garbage to play.', game, alice);
     expect(a.garbage.size).toBe(1); // a Wisp is a creature card: nothing to take
   });
 
   it('cheats a creature from hand into play', async () => {
     const { game, alice, a } = await table(BOULDERFIST_OGRE);
     const ogre = a.hand.cards[0]!;
-    await cast('Card Cheat\nCost 1\nSpell\nMove a creature card from your hand to play.', game, alice);
+    await cast('Card Cheat\n{ "cost": 1, "type": "spell" }\nMove a creature card from your hand to play.', game, alice);
     expect(a.hand.has(ogre) || game.engine.zones.zoneOf(ogre)?.id === PLAY.id).toBe(true);
     expect(a.hand.size).toBe(3);
   });
@@ -107,10 +107,10 @@ describe('Move … from … to … — playing it', () => {
     const { game, alice, a, b } = await table(WISP);
     // A hand holds only its owner's cards.
     await expect(
-      cast("Card Bad\nCost 1\nSpell\nMove a random card from target opponent's hand to your hand.", game, alice),
+      cast("Card Bad\n{ \"cost\": 1, \"type\": \"spell\" }\nMove a random card from target opponent's hand to your hand.", game, alice),
     ).rejects.toThrow(/belongs to Bob, so it cannot be put in Alice's hand/);
     const before = [a.hand.size, b.hand.size];
-    await cast("Card Thoughtsteal\nCost 3\nSpell\nMove a random card from target opponent's hand to your stolen zone.", game, alice);
+    await cast("Card Thoughtsteal\n{ \"cost\": 3, \"type\": \"spell\" }\nMove a random card from target opponent's hand to your stolen zone.", game, alice);
     const stolen = game.engine.zones.zone('stolen', alice)!;
     expect([a.hand.size, b.hand.size, stolen.size]).toEqual([before[0], before[1]! - 1, 1]);
     const card = stolen.members[0]!;
@@ -123,7 +123,7 @@ describe('Move … from … to … — playing it', () => {
     const { game, alice, a } = await table(WISP);
     const top = a.deck.cards.slice(0, 3);
     const handBefore = a.hand.size;
-    await cast('Card Dig\nCost 2\nSpell\nMove the top 3 cards from your deck to your hand.', game, alice);
+    await cast('Card Dig\n{ "cost": 2, "type": "spell" }\nMove the top 3 cards from your deck to your hand.', game, alice);
     expect(a.hand.size).toBe(handBefore + 3);
     for (const card of top) expect(a.hand.has(card)).toBe(true);
   });
@@ -131,14 +131,14 @@ describe('Move … from … to … — playing it', () => {
   it('mills the opponent: their deck to their own garbage', async () => {
     const { game, alice, b } = await table(WISP);
     const deckBefore = b.deck.size;
-    await cast("Card Mill\nCost 2\nSpell\nMove the top 3 cards from target opponent's deck to their garbage.", game, alice);
+    await cast("Card Mill\n{ \"cost\": 2, \"type\": \"spell\" }\nMove the top 3 cards from target opponent's deck to their garbage.", game, alice);
     expect(b.deck.size).toBe(deckBefore - 3);
     expect(b.garbage.size).toBe(3);
   });
 
   it('moves nothing, and does not fail, when there is nothing to take', async () => {
     const { game, alice, a } = await table(WISP);
-    await cast('Card Reclaim\nCost 2\nSpell\nMove 2 cards from your garbage to your hand.', game, alice);
+    await cast('Card Reclaim\n{ "cost": 2, "type": "spell" }\nMove 2 cards from your garbage to your hand.', game, alice);
     expect(a.garbage.size).toBe(0);
   });
 });
@@ -175,7 +175,7 @@ describe('Scry(player, X)', () => {
       const pick = request.options.includes(y!) && request.count instanceof Array ? [y!] : request.options.includes(z!) ? [z!] : [];
       return { kind: 'select', chosen: pick };
     };
-    await cast('Card Foresight\nCost 1\nSpell\nScry(you, 3).', game, alice);
+    await cast('Card Foresight\n{ "cost": 1, "type": "spell" }\nScry(you, 3).', game, alice);
     const after = a.deck.cards;
     expect(after.slice(0, 2)).toEqual([z, x]);
     expect(after[after.length - 1]).toBe(y);
@@ -195,7 +195,7 @@ describe('Scry(player, X)', () => {
       seen.push(game.engine.canSee(alice, top), game.engine.canSee(bob, top));
       return { kind: 'select', chosen: request.kind === 'select' && !(request.count instanceof Array) ? [request.options[0]!] : [] };
     };
-    await cast('Card Foresight\nCost 1\nSpell\nScry(you, 2).', game, alice);
+    await cast('Card Foresight\n{ "cost": 1, "type": "spell" }\nScry(you, 2).', game, alice);
     expect(seen.slice(0, 2)).toEqual([true, false]);
     expect(game.engine.canSee(alice, top)).toBe(false);
   });
@@ -207,7 +207,7 @@ describe('Scry(player, X)', () => {
     await game.setup();
     await game.collectUserDecisions();
     for (const card of [...game.sideOf(alice).deck.cards]) await game.engine.moveTo(card, GARBAGE.id, { owner: alice });
-    await cast('Card Foresight\nCost 1\nSpell\nScry(you, 3).', game, alice);
+    await cast('Card Foresight\n{ "cost": 1, "type": "spell" }\nScry(you, 3).', game, alice);
     expect(game.sideOf(alice).deck.size).toBe(0);
   });
 });
@@ -215,7 +215,7 @@ describe('Scry(player, X)', () => {
 /* ----------------------------- stack to play ----------------------------- */
 
 describe('Move … from the stack to play', () => {
-  const HERALD = ['Card Herald', 'Cost 3', 'Creature 2/2', 'When this enters play from stack then Deal 3 damage to all enemy characters.'].join('\n');
+  const HERALD = ['Card Herald', '{ "cost": 3, "type": "creature", "creatureConfig": { "power": 2, "health": 2 } }', 'When this enters play from stack then Deal 3 damage to all enemy characters.'].join('\n');
 
   async function withSpellOnStack() {
     const herald = playableCards(HERALD);
@@ -236,7 +236,7 @@ describe('Move … from the stack to play', () => {
   it('puts a creature spell straight into play, and its stack object leaves with it', async () => {
     const { game, alice, creature } = await withSpellOnStack();
     expect(game.cardStack.size).toBe(1);
-    await cast('Card Flash Cheat\nCost 2\nSpell\nMove a creature card from the stack to play.', game, alice);
+    await cast('Card Flash Cheat\n{ "cost": 2, "type": "spell" }\nMove a creature card from the stack to play.', game, alice);
     expect(game.engine.zones.zoneOf(creature)?.id).toBe(PLAY.id);
     expect(game.cardStack.size).toBe(0);
   });
@@ -244,7 +244,7 @@ describe('Move … from the stack to play', () => {
   it('is a real "enters play from stack": the arrival trigger fires, and the spell never resolves', async () => {
     const { game, alice, b, creature } = await withSpellOnStack();
     const hp = b.hero.gauge('hp').current;
-    await cast('Card Flash Cheat\nCost 2\nSpell\nMove a creature card from the stack to play.', game, alice);
+    await cast('Card Flash Cheat\n{ "cost": 2, "type": "spell" }\nMove a creature card from the stack to play.', game, alice);
     await game.runPriority(); // the arrival trigger goes on the stack and resolves; the cheated card does not resolve again
     expect(game.engine.zones.zoneOf(creature)?.id).toBe(PLAY.id);
     expect(b.hero.gauge('hp').current).toBe(hp - 3);
@@ -252,7 +252,7 @@ describe('Move … from the stack to play', () => {
 
   it('takes nothing else off the stack: a card on it stays and still resolves', async () => {
     const { game, alice, creature } = await withSpellOnStack();
-    await cast('Card Flash Cheat\nCost 2\nSpell\nMove a spell card from the stack to play.', game, alice);
+    await cast('Card Flash Cheat\n{ "cost": 2, "type": "spell" }\nMove a spell card from the stack to play.', game, alice);
     expect(game.engine.zones.zoneOf(creature)?.id).toBe('stack');
     expect(game.cardStack.size).toBe(1);
   });
@@ -261,7 +261,7 @@ describe('Move … from the stack to play', () => {
 /* --------------------------- castable by a player --------------------------- */
 
 describe('cards castable by a player', () => {
-  const PURGE = "Card Mind Purge\nCost 4\nSpell\nReveal all cards castable by target opponent.\nMove a card castable by target opponent to its owner's garbage.";
+  const PURGE = "Card Mind Purge\n{ \"cost\": 4, \"type\": \"spell\" }\nReveal all cards castable by target opponent.\nMove a card castable by target opponent to its owner's garbage.";
 
   it.each([
     ['Reveal all cards castable by target opponent.', { kind: 'revealCards', select: { how: 'all', count: 0 }, from: { castableBy: 'opponent' } }],
@@ -332,7 +332,7 @@ describe('Surveil(player, X)', () => {
       if (Array.isArray(request.count)) return { kind: 'select', chosen: [y!] };
       return { kind: 'select', chosen: [z!] };
     };
-    await cast('Card Probe\nCost 1\nSpell\nSurveil(you, 3).', game, alice);
+    await cast('Card Probe\n{ "cost": 1, "type": "spell" }\nSurveil(you, 3).', game, alice);
     expect(a.garbage.cards).toEqual([y]);
     expect(a.deck.size).toBe(deckBefore - 1);
     expect(a.deck.cards.slice(0, 2)).toEqual([z, x]);
@@ -378,7 +378,7 @@ describe('Move any number of … and the rest … in the order of your choice', 
       if (Array.isArray(request.count)) return { kind: 'select', chosen: [y!] }; // bottom y
       return { kind: 'select', chosen: [z!] }; // then z first
     };
-    await cast(`Card Probe\nCost 1\nSpell\n${text}`, game, alice);
+    await cast(`Card Probe\n{ "cost": 1, "type": "spell" }\n${text}`, game, alice);
     return { a, x: x!, y: y!, z: z! };
   }
 
@@ -419,7 +419,7 @@ describe('"target opponent" is one player for the whole card', () => {
       }
       return { kind: 'select', chosen: request.kind === 'select' ? [request.options[0]!] : [] };
     };
-    await cast("Card Mind Purge\nCost 4\nSpell\nReveal all cards castable by target opponent.\nMove a card castable by target opponent to its owner's garbage.", game, alice);
+    await cast("Card Mind Purge\n{ \"cost\": 4, \"type\": \"spell\" }\nReveal all cards castable by target opponent.\nMove a card castable by target opponent to its owner's garbage.", game, alice);
     expect(asked).toBe(1);
     expect(game.sideOf(cy).garbage.size).toBe(1);
     expect(game.sideOf(bob).garbage.size).toBe(0);

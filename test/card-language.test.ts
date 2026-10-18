@@ -30,7 +30,7 @@ const errors = (diagnostics: readonly Diagnostic[]): Diagnostic[] =>
   diagnostics.filter((d) => d.severity === 'error');
 
 describe('card document — spells', () => {
-  const FIREBALL = ['Card Fireball', 'Cost 4', 'Spell', 'Deal 6 damage to target enemy character.'].join('\n');
+  const FIREBALL = ['Card Fireball', '{ "cost": 4, "type": "spell" }', 'Deal 6 damage to target enemy character.'].join('\n');
 
   it('compiles a spell into a costed, targeted effect', () => {
     const result = compileCardDocument(FIREBALL);
@@ -47,7 +47,7 @@ describe('card document — spells', () => {
 
   it('treats a spell that names no target as untargeted', () => {
     const result = compileCardDocument(
-      ['Card Consecration', 'Cost 4', 'Spell', 'Deal 2 damage to all enemy characters.'].join('\n'),
+      ['Card Consecration', '{ "cost": 4, "type": "spell" }', 'Deal 2 damage to all enemy characters.'].join('\n'),
     );
     expect(errors(result.diagnostics)).toEqual([]);
     const card = result.cards[0]!;
@@ -57,7 +57,7 @@ describe('card document — spells', () => {
 
   it('rejects a spell with an enters-play line or a keyword', () => {
     const result = compileCardDocument(
-      ['Card Nonsense', 'Cost 1', 'Spell', 'Taunt.', 'When this enters play then Deal 1 damage to target enemy character.'].join('\n'),
+      ['Card Nonsense', '{ "cost": 1, "type": "spell" }', 'Taunt.', 'When this enters play then Deal 1 damage to target enemy character.'].join('\n'),
     );
     const codes = errors(result.diagnostics).map((d) => d.code);
     expect(codes).toContain('card-spell-enters-play');
@@ -65,14 +65,14 @@ describe('card document — spells', () => {
   });
 
   it('rejects a spell with no effect at all', () => {
-    const result = compileCardDocument(['Card Empty', 'Cost 1', 'Spell'].join('\n'));
+    const result = compileCardDocument(['Card Empty', '{ "cost": 1, "type": "spell" }'].join('\n'));
     expect(errors(result.diagnostics).map((d) => d.code)).toContain('card-spell-empty');
   });
 });
 
 describe('card document — creatures', () => {
   it('compiles a vanilla creature with its stat line and keyword', () => {
-    const result = compileCardDocument(['Card Shieldbearer', 'Cost 2', 'Creature 1/4', 'Taunt.'].join('\n'));
+    const result = compileCardDocument(['Card Shieldbearer', '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 1, "health": 4 } }', 'Taunt.'].join('\n'));
     expect(errors(result.diagnostics)).toEqual([]);
     const card = result.cards[0]!;
     expect(card.kind).toBe('creature');
@@ -86,8 +86,7 @@ describe('card document — creatures', () => {
   it('compiles "When this enters play then …" into the creature’s one-shot ability', () => {
     const source = [
       'Card Elven Archer',
-      'Cost 1',
-      'Creature 1/1',
+      '{ "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }',
       'When this enters play then Deal 1 damage to target enemy character.',
     ].join('\n');
     const result = compileCardDocument(source);
@@ -103,8 +102,7 @@ describe('card document — creatures', () => {
   it('mixes several enters-play sentences into one ability', () => {
     const source = [
       'Card Battle Cry',
-      'Cost 2',
-      'Creature 2/2',
+      '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 2, "health": 2 } }',
       'When this enters play then Deal 1 damage to target enemy character.',
       'When this enters play then Heal this for 2.',
     ].join('\n');
@@ -117,8 +115,7 @@ describe('card document — creatures', () => {
     const zones = new ZoneDictionary(['active', 'stack']);
     const source = [
       'Card Elven Archer',
-      'Cost 1',
-      'Creature 1/1',
+      '{ "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }',
       'When this enters play from active then Deal 1 damage to target enemy character.',
     ].join('\n');
     const result = compileCardDocument(source, { zones });
@@ -136,8 +133,7 @@ describe('card document — creatures', () => {
     const zones = new ZoneDictionary(['active', 'stack']);
     const source = [
       'Card Cursed Idol',
-      'Cost 2',
-      'Creature 2/1',
+      '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 2, "health": 1 } }',
       'When this enters play from stack then Deal 2 damage to all enemy characters.',
     ].join('\n');
     const result = compileCardDocument(source, { zones });
@@ -155,8 +151,7 @@ describe('card document — creatures', () => {
   it('rejects an origin zone the game does not declare', () => {
     const source = [
       'Card Lost',
-      'Cost 1',
-      'Creature 1/1',
+      '{ "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }',
       'When this enters play from nowhere then Deal 1 damage to target enemy character.',
     ].join('\n');
     const result = compileCardDocument(source);
@@ -166,13 +161,13 @@ describe('card document — creatures', () => {
   });
 
   it('insists an enters-play line says what happens', () => {
-    const source = ['Card Mute', 'Cost 2', 'Creature 2/2', 'When this enters play'].join('\n');
+    const source = ['Card Mute', '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 2, "health": 2 } }', 'When this enters play'].join('\n');
     const result = compileCardDocument(source);
     expect(errors(result.diagnostics).map((d) => d.code)).toContain('card-enters-play-empty');
   });
 
   it('turns "When this dies then …" into a trigger on destruction', () => {
-    const source = ['Card Cursed Idol', 'Cost 2', 'Creature 2/1', 'When this dies then Destroy all enemy characters.'].join('\n');
+    const source = ['Card Cursed Idol', '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 2, "health": 1 } }', 'When this is destroyed then Destroy all enemy characters.'].join('\n');
     const result = compileCardDocument(source);
     expect(errors(result.diagnostics)).toEqual([]);
     const card = result.cards[0]!;
@@ -181,20 +176,19 @@ describe('card document — creatures', () => {
   });
 
   it('points the retired card shorthand at the explicit event', () => {
-    const source = ['Card Old', 'Cost 2', 'Creature 2/1', 'Deathrattle: Destroy all enemy characters.'].join('\n');
+    const source = ['Card Old', '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 2, "health": 1 } }', 'Deathrattle: Destroy all enemy characters.'].join('\n');
     const result = compileCardDocument(source);
     const diagnostic = result.diagnostics.find((d) => d.code === 'card-legacy-deathrattle');
     expect(diagnostic).toBeDefined();
-    expect(diagnostic!.message).toContain('When this dies then');
+    expect(diagnostic!.message).toContain('When this is destroyed then');
     expect(text(source, diagnostic!)).toBe('Deathrattle: Destroy all enemy characters.');
   });
 
   it('accepts a standing When trigger', () => {
     const source = [
       'Card Gurubashi Berserker',
-      'Cost 5',
-      'Creature 2/7',
-      'When this takes damage then heal this for 1.',
+      '{ "cost": 5, "type": "creature", "creatureConfig": { "power": 2, "health": 7 } }',
+      'When this is damaged then heal this for 1.',
     ].join('\n');
     const result = compileCardDocument(source);
     expect(errors(result.diagnostics)).toEqual([]);
@@ -202,16 +196,41 @@ describe('card document — creatures', () => {
   });
 
   it('insists a creature effect says *when* it happens', () => {
-    const source = ['Card Confused', 'Cost 1', 'Creature 1/1', 'Deal 1 damage to target enemy character.'].join('\n');
+    const source = ['Card Confused', '{ "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }', 'Deal 1 damage to target enemy character.'].join('\n');
     const result = compileCardDocument(source);
     expect(errors(result.diagnostics).map((d) => d.code)).toContain('card-creature-effect-bare');
   });
 
-  it('requires a cost and a body on every card', () => {
-    const result = compileCardDocument('Card Nameless');
-    const codes = errors(result.diagnostics).map((d) => d.code);
-    expect(codes).toContain('card-cost-missing');
-    expect(codes).toContain('card-kind-missing');
+  it('requires a header on every card, with a cost and a type', () => {
+    expect(errors(compileCardDocument('Card Nameless').diagnostics).map((d) => d.code)).toContain('card-header-missing');
+    const codes = (header: string) => errors(compileCardDocument(`Card Nameless\n${header}`).diagnostics).map((d) => d.code);
+    expect(codes('{ "type": "spell" }')).toContain('card-cost-missing');
+    expect(codes('{ "cost": 1 }')).toContain('card-kind-missing');
+    expect(codes('{ "cost": 1, "type": "creature" }')).toContain('card-creature-config');
+    expect(codes('{ "cost": 1, "type": "spell", "creatureConfig": { "power": 1, "health": 1 } }')).toContain('card-creature-config');
+    expect(codes('{ "cost": 1, "type": "spell", "rarity": "rare" }')).toContain('card-header-field');
+    expect(codes('{ "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 1, "speed": 2 } }')).toContain('card-header-field');
+    expect(codes('{ "cost": 1, "type": ')).toContain('card-header-json');
+  });
+
+  it('reads a header spread over several lines, and puts its creature settings under creatureConfig', () => {
+    const source = ['Card Ogre', '{', '  "cost": 6,', '  "type": "creature",', '  "creatureConfig": { "power": 6, "health": 7 }', '}', 'Taunt.'].join('\n');
+    const result = compileCardDocument(source);
+    expect(errors(result.diagnostics)).toEqual([]);
+    expect(result.cards[0]).toMatchObject({ cost: 6, kind: 'creature', power: 6, health: 7 });
+  });
+
+  it('points a header problem at the key that caused it', () => {
+    const source = ['Card Ogre', '{ "cost": 6, "type": "creature", "creatureConfig": { "power": "six", "health": 7 } }'].join('\n');
+    const diagnostic = compileCardDocument(source).diagnostics.find((d) => d.code === 'card-creature-config');
+    expect(text(source, diagnostic!)).toBe('"power"');
+  });
+
+  it('tells the old Cost / Spell / Creature p/h lines to become the header', () => {
+    const source = ['Card Fireball', 'Cost 4', 'Spell', 'Deal 6 damage to target enemy character.'].join('\n');
+    const old = compileCardDocument(source).diagnostics.filter((d) => d.code === 'card-header-old');
+    expect(old.map((d) => text(source, d))).toEqual(['Cost 4', 'Spell']);
+    expect(old[0]!.message).toContain('JSON header');
   });
 });
 
@@ -219,12 +238,10 @@ describe('card document — sections and spans', () => {
   it('compiles several cards and keeps them separate', () => {
     const source = [
       'Card Wisp',
-      'Cost 0',
-      'Creature 1/1',
+      '{ "cost": 0, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }',
       '',
       'Card Fireball',
-      'Cost 4',
-      'Spell',
+      '{ "cost": 4, "type": "spell" }',
       'Deal 6 damage to target enemy character.',
     ].join('\n');
     const result = compileCardDocument(source);
@@ -235,7 +252,7 @@ describe('card document — sections and spans', () => {
   });
 
   it('points an unknown-word diagnostic at the offending word', () => {
-    const source = ['Card Broken', 'Cost 1', 'Spell', 'Destroy the moon.'].join('\n');
+    const source = ['Card Broken', '{ "cost": 1, "type": "spell" }', 'Destroy the moon.'].join('\n');
     const result = compileCardDocument(source);
     const diagnostic = errors(result.diagnostics).find((d) => d.severity === 'error');
     expect(diagnostic).toBeDefined();
@@ -244,23 +261,23 @@ describe('card document — sections and spans', () => {
   });
 
   it('points a card-level diagnostic at the offending line', () => {
-    const source = ['Card Broken', 'Cost 1', 'Creature three/seven'].join('\n');
+    const source = ['Card Broken', '{ "cost": 1, "type": "creature", "creatureConfig": { "power": 3, "health": 7 } }', 'Creature three/seven'].join('\n');
     const result = compileCardDocument(source);
     const diagnostic = result.diagnostics.find((d) => d.code === 'card-unknown-line');
     expect(diagnostic).toBeDefined();
     expect(text(source, diagnostic!)).toBe('Creature three/seven');
   });
 
-  it('points a missing-cost diagnostic at the card heading', () => {
-    const source = ['Card Fireball', 'Spell', 'Deal 6 damage to target enemy character.'].join('\n');
+  it('points a missing-header diagnostic at the card heading', () => {
+    const source = ['Card Fireball', 'Deal 6 damage to target enemy character.'].join('\n');
     const result = compileCardDocument(source);
-    const diagnostic = result.diagnostics.find((d) => d.code === 'card-cost-missing');
+    const diagnostic = result.diagnostics.find((d) => d.code === 'card-header-missing');
     expect(diagnostic).toBeDefined();
     expect(text(source, diagnostic!)).toBe('Card Fireball');
   });
 
   it('flags content that belongs to no card', () => {
-    const source = ['Deal 1 damage to target enemy character.', '', 'Card Wisp', 'Cost 0', 'Creature 1/1'].join('\n');
+    const source = ['Deal 1 damage to target enemy character.', '', 'Card Wisp', '{ "cost": 0, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }'].join('\n');
     const result = compileCardDocument(source);
     const diagnostic = result.diagnostics.find((d) => d.code === 'card-orphan-line');
     expect(diagnostic).toBeDefined();
@@ -270,11 +287,10 @@ describe('card document — sections and spans', () => {
 
 describe('card document — declared buffs', () => {
   const source = [
-    'Buff Frailty (stacks)',
+    'Buff Frailty',
     '',
     'Card Soul Rot',
-    'Cost 2',
-    'Spell',
+    '{ "cost": 2, "type": "spell" }',
     'Add Frailty to target enemy character.',
   ].join('\n');
 
@@ -287,7 +303,7 @@ describe('card document — declared buffs', () => {
   });
 
   it('warns once when a declared buff is never used', () => {
-    const unused = ['Buff Unused', '', 'Card Wisp', 'Cost 0', 'Creature 1/1'].join('\n');
+    const unused = ['Buff Unused', '', 'Card Wisp', '{ "cost": 0, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }'].join('\n');
     const result = compileCardDocument(unused);
     const warnings = result.diagnostics.filter((d) => d.code === 'unused-buff');
     expect(warnings).toHaveLength(1);
@@ -299,11 +315,10 @@ describe('card document — declared buffs', () => {
       'Buff Inner',
       '',
       'Buff Outer',
-      'When this takes damage then add Inner to this.',
+      'When this is damaged then add Inner to this.',
       '',
       'Card Wisp',
-      'Cost 0',
-      'Creature 1/1',
+      '{ "cost": 0, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }',
     ].join('\n');
     const result = compileCardDocument(chained);
     const unusedNames = result.diagnostics
@@ -322,16 +337,15 @@ describe('card document — completion', () => {
     expect(labels).toContain('Buff');
   });
 
-  it('offers cost and body on a fresh line inside a card', () => {
+  it('offers the header on a fresh line inside a card', () => {
     const source = 'Card Fireball\n';
     const labels = completeCardAt(source, source.length).map((s) => s.label);
-    expect(labels).toContain('Cost');
-    expect(labels).toContain('Creature');
-    expect(labels).toContain('Spell');
+    expect(labels.some((label) => label.startsWith('{ "cost": 3, "type": "spell"'))).toBe(true);
+    expect(labels.some((label) => label.includes('"creatureConfig"'))).toBe(true);
   });
 
   it('offers creature words once the card is a creature', () => {
-    const source = 'Card Ogre\nCost 6\nCreature 6/7\n';
+    const source = 'Card Ogre\n{ "cost": 6, "type": "creature", "creatureConfig": { "power": 6, "health": 7 } }\n';
     const labels = completeCardAt(source, source.length).map((s) => s.label);
     expect(labels).toContain('Taunt.');
     expect(labels).toContain('Charge.');
@@ -340,7 +354,7 @@ describe('card document — completion', () => {
   });
 
   it('offers sentences — not creature words — once the card is a spell', () => {
-    const source = 'Card Fireball\nCost 4\nSpell\n';
+    const source = 'Card Fireball\n{ "cost": 4, "type": "spell" }\n';
     const labels = completeCardAt(source, source.length).map((s) => s.label);
     expect(labels).toContain('Deal');
     expect(labels).toContain('Destroy');
@@ -348,25 +362,25 @@ describe('card document — completion', () => {
   });
 
   it('delegates a spell effect sentence to the ability grammar', () => {
-    const source = ['Card Fireball', 'Cost 4', 'Spell', 'Deal 6 '].join('\n');
+    const source = ['Card Fireball', '{ "cost": 4, "type": "spell" }', 'Deal 6 '].join('\n');
     const labels = completeCardAt(source, source.length).map((s) => s.label);
     expect(labels).toContain('damage');
   });
 
   it('delegates an enters-play body to the ability grammar', () => {
-    const source = ['Card Archer', 'Cost 1', 'Creature 1/1', 'When this enters play then Deal 1 damage '].join('\n');
+    const source = ['Card Archer', '{ "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }', 'When this enters play then Deal 1 damage '].join('\n');
     const labels = completeCardAt(source, source.length).map((s) => s.label);
     expect(labels).toContain('to');
   });
 
   it('offers "then" once an enters-play event is complete', () => {
-    const source = ['Card Archer', 'Cost 1', 'Creature 1/1', 'When this enters play '].join('\n');
+    const source = ['Card Archer', '{ "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }', 'When this enters play '].join('\n');
     const labels = completeCardAt(source, source.length).map((s) => s.label);
     expect(labels).toContain('then');
   });
 
   it('delegates an on-death body to the ability grammar', () => {
-    const source = ['Card Idol', 'Cost 2', 'Creature 2/1', 'When this dies then Deal 2 '].join('\n');
+    const source = ['Card Idol', '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 2, "health": 1 } }', 'When this is destroyed then Deal 2 '].join('\n');
     const labels = completeCardAt(source, source.length).map((s) => s.label);
     expect(labels).toContain('damage');
   });
@@ -378,15 +392,15 @@ describe('card document — completion', () => {
   });
 
   it('offers whole event phrases on a trigger line', () => {
-    const source = ['Card Idol', 'Cost 2', 'Creature 2/1', 'When '].join('\n');
+    const source = ['Card Idol', '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 2, "health": 1 } }', 'When '].join('\n');
     const labels = completeCardAt(source, source.length).map((s) => s.label);
     expect(labels).toContain('this enters play');
-    expect(labels).toContain('this takes damage');
-    expect(labels).toContain('this dies');
+    expect(labels).toContain('this is damaged');
+    expect(labels).toContain('this is destroyed');
   });
 
   it('offers the game’s zones after "from" on an arrival line', () => {
-    const source = ['Card Archer', 'Cost 1', 'Creature 1/1', 'When this enters play from '].join('\n');
+    const source = ['Card Archer', '{ "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }', 'When this enters play from '].join('\n');
     const labels = completeCardAt(source, source.length, emptyDictionary(), CARD_LANGUAGE_ZONES).map((s) => s.label);
     expect(labels).toContain('active');
     expect(labels).toContain('stack');
@@ -397,8 +411,7 @@ describe('card document — completion', () => {
       'Buff Frailty',
       '',
       'Card Soul Rot',
-      'Cost 2',
-      'Spell',
+      '{ "cost": 2, "type": "spell" }',
       'Add ',
     ].join('\n');
     const labels = completeCardAt(source, source.length).map((s) => s.label);
@@ -412,7 +425,7 @@ describe('card document — completion', () => {
 
   it('documents the card words for hover', () => {
     expect(CARD_WORD_DOCS['enters']).toContain('enters play');
-    expect(CARD_WORD_DOCS['dies']).toContain('dies');
+    expect(CARD_WORD_DOCS['destroyed']).toContain('destroyed');
   });
 });
 
@@ -425,4 +438,21 @@ describe('card document — the creator’s samples', () => {
       expect(result.cards.length).toBeGreaterThan(0);
     });
   }
+});
+
+describe('creature definitions (tokens) take the same header', () => {
+  const codes = (source: string) => errors(compileCardDocument(source).diagnostics).map((d) => d.code);
+
+  it('reads Creature <name> with a creatureConfig header and no cost', () => {
+    const result = compileCardDocument('Creature Giant Golem\n{ "type": "creature", "creatureConfig": { "power": 6, "health": 6 } }\nTaunt.');
+    expect(errors(result.diagnostics)).toEqual([]);
+    expect(result.cards.map((c) => [c.name, c.token === true, c.cost])).toEqual([['Giant Golem', true, 0]]);
+  });
+
+  it('asks for the header, and points the old stat line at it', () => {
+    expect(codes('Creature Giant Golem\nTaunt.')).toContain('card-header-missing');
+    expect(codes('Creature Giant Golem 6/6\nTaunt.')).toContain('card-header-old');
+    expect(codes('Creature Golem\n{ "cost": 3, "type": "creature", "creatureConfig": { "power": 6, "health": 6 } }')).toContain('card-header-field');
+    expect(codes('Creature Golem\n{ "type": "spell" }')).toContain('card-kind-missing');
+  });
 });

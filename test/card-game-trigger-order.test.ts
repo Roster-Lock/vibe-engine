@@ -43,8 +43,7 @@ function herald(): Card {
   const { cards } = playableCards(
     [
       'Card Test Herald',
-      'Cost 1',
-      'Creature 1/1',
+      '{ "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }',
       'When this enters play from active then Deal 1 damage to all enemy characters.',
       'When this enters play from active then Deal 2 damage to all enemy characters.',
     ].join('\n'),
@@ -113,8 +112,7 @@ describe('ordering triggers in the card game', () => {
     const { cards } = playableCards(
       [
         'Card Test Warden',
-        'Cost 1',
-        'Creature 1/1',
+        '{ "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }',
         'When this enters play from active then Deal 1 damage to all enemy characters.',
       ].join('\n'),
     );

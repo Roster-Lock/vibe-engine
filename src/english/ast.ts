@@ -42,7 +42,62 @@ export interface Doc {
    * `CompileResult.triggers`).
    */
   readonly triggers: TriggerSentence[];
+  /** `Contest Rock Paper Scissors` sections — each one a function from a list of players to who won. */
+  readonly contests: ContestSection[];
 }
+
+/**
+ * A `Contest <name>` section: the rulebook of a game several players play.
+ *
+ * ```
+ * Contest Rock Paper Scissors
+ * Players 2.
+ * All players commit Rock, Paper or Scissors face down.
+ * When they are ready, reveal.
+ * If all players committed the same option, it is a tie.
+ * If player 1 committed Rock and player 2 committed Scissors, player 1 win and player 2 lose.
+ * Otherwise player 2 win and player 1 lose.
+ * ```
+ *
+ * It is read by the same parser as every other section — the commit and reveal are the
+ * ordinary choice sentences — and what it means is a function of the players it receives:
+ * `(players) => { winners, losers, isTie }`. `contest` is that function's data (the IR), present
+ * once the section has no problems.
+ */
+export interface ContestSection {
+  readonly kind: 'contest';
+  span: Span;
+  readonly name: string;
+  readonly nameSpan: Span;
+  /** `Players 2.` — how many must play. */
+  playerCount?: number;
+  /** The `All players commit … face down.` sentence: the names players commit between. */
+  commit?: { readonly options: readonly string[]; readonly span: Span };
+  /** True once `When they are ready, reveal.` has followed the commit. */
+  revealed: boolean;
+  rules: ContestRuleNode[];
+  /** The contest as data, once the section is valid. */
+  contest?: ContestIR;
+}
+
+/** One rule of a contest, with the spans a diagnostic points at. */
+export type ContestRuleNode =
+  | { readonly kind: 'tie'; readonly span: Span }
+  | {
+      readonly kind: 'when';
+      readonly span: Span;
+      readonly picks: readonly { readonly player: number; readonly option: string; readonly playerSpan: Span; readonly optionSpan: Span }[];
+      readonly winners: readonly number[];
+      readonly losers: readonly number[];
+      readonly playerSpans: readonly Span[];
+    }
+  | {
+      readonly kind: 'otherwise';
+      readonly span: Span;
+      readonly winners: readonly number[];
+      readonly losers: readonly number[];
+      readonly playerSpans: readonly Span[];
+    };
 
 /**
  * How many of the triggering things the batch must hold.
@@ -89,7 +144,7 @@ export interface TriggerSentence {
   /**
    * For a gauge event: which gauge, and which direction. A named id, or
    * `{ kind: 'life' }` for the triggering entity's own life gauge —
-   * what `takes damage`/`is healed` watch (see `EventPhrase.gauge`).
+   * what `is damaged`/`is healed` watch (see `EventPhrase.gauge`).
    */
   readonly gauge?: string | { readonly kind: 'life' };
   readonly change?: 'damage' | 'heal';
@@ -131,7 +186,7 @@ export interface ZonePhrase {
  *
  * ```
  * Zone boxed
- * Cards in this zone have Open Present for each opponent.
+ * Cards in this zone have Open Present for all opponents.
  * ```
  *
  * For a per-player zone it covers every player's instance, and "you" / "each
@@ -186,12 +241,12 @@ export interface BuffSection {
   readonly span: Span;
   readonly name: string;
   readonly nameSpan: Span;
-  /** Whether the buff may stack (`BuffDef.stacks`). */
-  readonly stacks: boolean;
-  /** The buff's weight (`BuffDef.weight`). Defaults to 1. */
-  readonly weight: number;
-  /** `until end of turn` / `for <n> turns`. Absent means permanent. */
-  readonly duration?: { readonly kind: 'endOfTurn' } | { readonly kind: 'turns'; readonly count: number };
+  /** The buff's weight (`BuffDef.weight`), set by the `Weight <n>.` keyword line. Defaults to 1. */
+  weight: number;
+  /** Where the `Weight` line is, once written. */
+  weightSpan?: Span;
+  /** The `Fading <n>.` keyword line: the counters each instance starts with. Absent means permanent. */
+  fading?: number;
   /** Sentences (triggers / effects) defined on the buff. */
   readonly sentences: Sentence[];
   /** `when … then …` triggers the buff grants while it is attached. */
@@ -300,37 +355,23 @@ export type IfClause =
       readonly condition: BooleanCondition;
     }
   /**
-   * `<value> is <test>` — a condition on a number: `that total is 10 or more`,
-   * `AttackerRoll is higher than DefenderRoll`. The value is any amount (a roll,
-   * a stored name, a formula).
+   * `<value> <op> <value> [and …]` — a condition on numbers: `that value >= 10`,
+   * `AttackerRoll > DefenderRoll`, `that value >= 2 and that value <= 5`. Each
+   * side is any amount (a roll, a stored name, a formula).
    */
   | {
       readonly kind: 'value';
       readonly span: Span;
-      readonly value: MathExpression;
-      readonly test: ValueTest;
+      readonly comparisons: readonly ValueComparison[];
     };
 
-/**
- * What a number is tested against. A **range** is `N`, `N to M`, `N or more` or
- * `N or less`; a **comparison** is against another amount: `higher than`,
- * `lower than`, `the same as`.
- */
-export type ValueTest =
-  | {
-      readonly kind: 'range';
-      /** A bare `N` — equal to, rather than the one-point range `N to N`. */
-      readonly exact: boolean;
-      readonly min: number | null;
-      readonly max: number | null;
-      /** The test as written (`10 or more`), for diagnostics. */
-      readonly text: string;
-    }
-  | {
-      readonly kind: 'compare';
-      readonly op: '>' | '<' | '=';
-      readonly other: MathExpression;
-    };
+/** One `<value> <op> <value>` comparison of a value condition; several are joined by `and`. */
+export interface ValueComparison {
+  readonly span: Span;
+  readonly value: MathExpression;
+  readonly op: WithOperator;
+  readonly other: MathExpression;
+}
 
 /**
  * `Repeat [up to <n> times] [while <condition>] [if you choose]: <effect>.`
@@ -485,7 +526,7 @@ export interface ToggleBuffSentence {
 }
 
 /**
- * `Cards in your boxed zone have Open Present for each opponent.` — gives every
+ * `Cards in your boxed zone have Open Present for all opponents.` — gives every
  * card in a zone an ability it never printed, for the players named. The ability
  * is one of the document's own, named as written; whose zone, and who may use it,
  * are spelled out so nothing is left to a reader to guess. Without `for …` anyone
@@ -497,7 +538,7 @@ export interface ZoneAbilitySentence {
   readonly zone: string;
   readonly zoneSpan: Span;
   /**
-   * Whose instance of the zone: `your`, `each player's`, `each opponent's`, `the` (a
+   * Whose instance of the zone: `your`, `all players'`, `all opponents'`, `the` (a
    * shared zone), or `this` — the zone a `Zone` section is about (then `zone` is
    * empty until the section fills it in).
    */
@@ -564,7 +605,7 @@ export interface CreateSentence {
   readonly event?: string;
 }
 
-/** `Each player plays Rock Paper Scissors.` */
+/** `All players play Rock Paper Scissors.` */
 export interface PlaySentence {
   readonly kind: 'play';
   readonly span: Span;
@@ -733,7 +774,7 @@ export interface TableRow {
 export interface StoreSentence {
   readonly kind: 'store';
   readonly span: Span;
-  /** The value kept: `that total`, a number, or a formula. */
+  /** The value kept: `that value`, a number, or a formula. */
   readonly value: MathExpression;
   readonly name: string;
   readonly nameSpan: Span;
@@ -783,8 +824,8 @@ export interface DrawSentence {
 }
 
 /**
- * `Each player commits a card from their hand face down.` /
- * `Each player chooses a number from 1 to 6.`
+ * `All players commit a card from their hand face down.` /
+ * `Starting with you, each player chooses a number from 1 to 6.`
  *
  * Opens a choice round (docs/design/20-secret-choices-and-dice.md). **Commit**
  * is sealed: every player answers without seeing the others, face down. **Choose**
@@ -831,7 +872,7 @@ export interface RevealSentence {
   readonly event?: string;
 }
 
-/** `Each player puts the card they chose into their garbage.` */
+/** `All players move the card they chose to their garbage.` */
 export interface MoveChosenSentence {
   readonly kind: 'moveChosen';
   readonly span: Span;
@@ -879,7 +920,7 @@ export type Quantifier =
   | 'target'
   | 'all'
   /**
-   * `the source character` / `the source buff` — whatever caused the
+   * `the source` / `the source buff` — whatever caused the
    * triggering event. Only meaningful inside a trigger; elsewhere it
    * resolves to nobody, so the effect is a no-op rather than an error.
    *
@@ -904,7 +945,7 @@ export type WithOperator = '<' | '<=' | '>' | '>=' | '=';
 export interface GaugeCondition {
   readonly kind: 'gauge';
   readonly span: Span;
-  readonly gauge: 'hp' | 'mana';
+  readonly gauge: string;
   readonly gaugeSpan: Span;
   readonly op: WithOperator;
   readonly opSpan: Span;

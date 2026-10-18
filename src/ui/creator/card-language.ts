@@ -44,12 +44,12 @@ const KEYWORDS = [
   'With', 'Hp', 'Mana', 'And', 'Or', 'If', 'May', 'Repeat',
   // Lowercase forms — the editor does not force capitalization.
   'card', 'cost', 'creature', 'spell', 'taunt', 'charge',
-  'when', 'then', 'enters', 'play', 'dies', 'takes', 'healed', 'survives',
+  'when', 'then', 'enters', 'play', 'destroyed', 'damaged', 'healed', 'survives',
   'buff', 'deal', 'heal', 'destroy', 'add', 'remove', 'toggle',
   'you', 'all', 'players', 'win', 'wins', 'lose', 'loses',
-  'target', 'this', 'other', 'enemy', 'ally', 'allied',
-  'character', 'characters', 'owned', 'opponent', 'the', 'game',
-  'to', 'from', 'for', 'by', 'weight', 'stacks', 'damage',
+  'target', 'this', 'other', 'enemy', 'ally',
+  'character', 'characters', 'owned', 'opponents', 'the', 'game',
+  'to', 'from', 'for', 'by', 'weight', 'fading', 'damage',
   'with', 'hp', 'mana', 'and', 'or', 'if', 'may', 'repeat',
 ];
 
@@ -59,7 +59,7 @@ let editorZones: ZoneDictionary = emptyZoneDictionary();
 
 /**
  * Registers the card language and its providers once. `zones` is the
- * hosting game's zone list (the engine's `play`/`graveyard` are always
+ * hosting game's zone list (the engine's `play`/`garbage` are always
  * known), so `from active` is offered exactly where the document may name
  * it.
  */

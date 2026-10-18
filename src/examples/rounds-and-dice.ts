@@ -130,9 +130,9 @@ async function play(
 
 async function showdown(): Promise<void> {
   const document = `Ability Showdown
-Each player commits a card from their hand face down.
+All players commit a card from their hand face down.
 When they are ready, reveal.
-Each player puts the card they committed into their garbage.`;
+All players move the card they committed to their garbage.`;
   banner('1. Showdown — everyone commits a card face down, then reveals', document);
   const { players, zone, events } = await play(document, [
     { name: 'Alice', move: { id: 'a-2' }, hand: [new Card('Wisp', 'a-1'), new Card('Bolt', 'a-2')] },
@@ -148,9 +148,9 @@ Each player puts the card they committed into their garbage.`;
 
 async function vague(): Promise<void> {
   const document = `Ability Showdown
-Each player commits a card from their hand face down.
+All players commit a card from their hand face down.
 When they are ready, reveal.
-Each player puts the card they committed into their garbage.`;
+All players move the card they committed to their garbage.`;
   banner('2. A vague commitment loses — Bob writes "Goblin" but holds two', document);
   const goblins = [new Card('Goblin', 'b-1'), new Card('Goblin', 'b-2')];
   const { events, ended } = await play(document, [
@@ -166,9 +166,9 @@ Each player puts the card they committed into their garbage.`;
 
 async function byId(): Promise<void> {
   const document = `Ability Showdown
-Each player commits a card from their hand face down.
+All players commit a card from their hand face down.
 When they are ready, reveal.
-Each player puts the card they committed into their garbage.`;
+All players move the card they committed to their garbage.`;
   banner('3. The same two goblins, chosen by id — never vague', document);
   const { players, zone, ended } = await play(document, [
     { name: 'Alice', move: { id: 'a-1' }, hand: [new Card('Wisp', 'a-1')] },
@@ -184,7 +184,7 @@ Each player puts the card they committed into their garbage.`;
 
 async function numbers(): Promise<void> {
   const document = `Ability Bid
-Each player commits a number from 1 to 6 face down.
+All players commit a number from 1 to 6 face down.
 When they are ready, reveal.`;
   banner('4. Secret numbers, revealed together', document);
   const { events } = await play(document, [
@@ -206,8 +206,8 @@ async function dice(): Promise<void> {
 Roll a d6.
 Store that value as AttackerRoll.
 Roll a d20.
-Deal AttackerRoll damage to this character.
-Deal that value damage to this character.`;
+Deal AttackerRoll damage to this.
+Deal that value damage to this.`;
   banner('5. Dice — "that" is the most recent roll; "Store … as" keeps an earlier one', document);
   const { players, hp } = await play(
     document,
@@ -226,7 +226,7 @@ async function drawing(): Promise<void> {
   const document = `Ability Study
 Roll a d6.
 Draw(you, that value).
-Draw(each opponent, 1).`;
+Draw(all opponents, 1).`;
   banner('6. Draw(player, count) — here the count is a die roll', document);
   const deck = (prefix: string): Card[] => [1, 2, 3, 4, 5, 6, 7].map((n) => new Card(`${prefix}${n}`, `${prefix}-${n}`));
   const { players, zone } = await play(
@@ -245,10 +245,10 @@ Draw(each opponent, 1).`;
 async function table(): Promise<void> {
   const document = `Ability Deck of Many Things
 Roll a d20.
-  1: Deal 25 damage to this character.
-  2 to 5: Deal 5 damage to this character.
-  6 to 19: Heal this character for 3.
-  20: Draw(you, 2). Heal this character for 10.`;
+  1: Deal 25 damage to this.
+  2 to 5: Deal 5 damage to this.
+  6 to 19: Heal this for 3.
+  20: Draw(you, 2). Heal this for 10.`;
   banner('7. A roll table — a result per line', document);
   for (const roll of [1, 4, 12, 20]) {
     const { players, hp, zone } = await play(
@@ -271,9 +271,9 @@ Roll a d20.
 Store that value as AttackerRoll.
 Roll a d20.
 Store that value as DefenderRoll.
-If AttackerRoll is higher than DefenderRoll, Deal 10 damage to this character.
-If AttackerRoll is lower than DefenderRoll, Deal 20 damage to this character.
-If AttackerRoll is the same as DefenderRoll, Deal 1 damage to this character.`;
+If AttackerRoll > DefenderRoll, Deal 10 damage to this.
+If AttackerRoll < DefenderRoll, Deal 20 damage to this.
+If AttackerRoll = DefenderRoll, Deal 1 damage to this.`;
   banner('8. A duel — two stored rolls compared', document);
   for (const [attacker, defender] of [[15, 4], [4, 15], [9, 9]] as const) {
     const { players, hp } = await play(
@@ -292,14 +292,14 @@ If AttackerRoll is the same as DefenderRoll, Deal 1 damage to this character.`;
 
 async function votes(): Promise<void> {
   const tally = `
-If votes for Attack is higher than votes for Retreat, Deal 10 damage to this character.
-If votes for Attack is lower than votes for Retreat, Deal 20 damage to this character.`;
+If votes for Attack > votes for Retreat, Deal 10 damage to this.
+If votes for Attack < votes for Retreat, Deal 20 damage to this.`;
   const kinds: [string, string][] = [
-    ['commit / reveal', 'Each player commits a vote for Attack or Retreat face down.\nWhen they are ready, reveal.'],
-    ['the caster goes first', 'Starting with you, each player votes for Attack or Retreat.'],
-    ['the caster goes last', 'Ending with you, each player votes for Attack or Retreat.'],
-    ['a random player goes first', 'Starting with a random player, each player votes for Attack or Retreat.'],
-    ['reverse order', 'In reverse order, each player votes for Attack or Retreat.'],
+    ['commit / reveal', 'All players commit Attack or Retreat face down.\nWhen they are ready, reveal.'],
+    ['the caster goes first', 'Starting with you, each player chooses Attack or Retreat.'],
+    ['the caster goes last', 'Ending with you, each player chooses Attack or Retreat.'],
+    ['a random player goes first', 'Starting with a random player, each player chooses Attack or Retreat.'],
+    ['reverse order', 'In reverse order, each player chooses Attack or Retreat.'],
   ];
   banner('9. Votes — five kinds (seats Alice, Bob, Cara, Dev; Cara casts; the die shows 2)', kinds.map(([, line]) => line).join('\n'));
   const choice = ['Attack', 'Retreat', 'Attack', 'Attack'];
@@ -350,11 +350,11 @@ async function visibility(): Promise<void> {
 
 async function boxedPresent(): Promise<void> {
   const document = `Ability Open Present
-Reveal this card.
-Cast this card if you can, otherwise move it to its owner's garbage.
+Reveal this.
+Cast this if you can, otherwise move it to its owner's garbage.
 
 Zone boxed
-Cards in this zone have Open Present for each opponent.`;
+Cards in this zone have Open Present for all opponents.`;
   banner('11. The Boxed Present — a Zone section gives its cards an ability they never printed', document);
   const engine = createEngine({ seed: 'example' });
   for (const zone of [PLAY, GARBAGE]) engine.zones.declare(zone);

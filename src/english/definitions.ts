@@ -134,10 +134,8 @@ export function indexDocuments(sources: readonly DefinitionSource[]): {
   return { index, parsed: parsed.map(({ result }) => result) };
 }
 
-function buffDefinitionOf(section: { name: string; weight: number; stacks: boolean }): BuffDef {
-  return section.stacks
-    ? { name: section.name, weight: section.weight, stacks: true }
-    : { name: section.name, weight: section.weight };
+function buffDefinitionOf(section: { name: string; weight: number }): BuffDef {
+  return { name: section.name, weight: section.weight };
 }
 
 function lineAt(text: string, offset: number): number {

@@ -331,7 +331,7 @@ export class CardGame extends Game {
   /**
    * Adds the zones a card document declares (`Zone Suspend (per-player, public)`) and the
    * rules they keep. Call before `setup()` / `runLoop()`: the zones are declared now, their
-   * rules are applied at setup, and their `At the start of your turn, …` rules run each turn.
+   * rules are applied at setup, and their `When your turn starts then …` rules run each turn.
    */
   installZones(authored: { readonly zoneDefs: readonly ZoneDef[]; readonly zoneBindings: readonly ZoneBinding[] }): void {
     for (const def of authored.zoneDefs) this.engine.zones.declare(def);
@@ -381,7 +381,7 @@ export class CardGame extends Game {
    */
   async applyRules(timing: RuleTiming, turnOwner: Side): Promise<void> {
     if (timing === 'turn:start') {
-      // Zones keep their own rules (`Zone Suspend: At the start of your turn, …`).
+      // Zones keep their own rules (`Zone Suspend: When your turn starts then …`).
       for (const binding of this.#zoneBindings) await binding.trigger('turn:start', this.engine, turnOwner.hero.controller);
     }
     for (const rule of this.rules.at(timing)) {

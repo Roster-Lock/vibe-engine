@@ -285,7 +285,6 @@ export const leash = buff({
 export const trapMine = buff({
   name: 'Trap Mine',
   weight: 1,
-  stacks: true,
   abilities: [
     auto({
       name: 'Detonate',

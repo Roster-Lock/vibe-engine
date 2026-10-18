@@ -119,7 +119,7 @@ export const manaCrystal = buff({
   description: '+1 maximum mana',
   weight: 0,
   removable: false,
-  stacks: true, // ten separate crystals, not one buff that cannot repeat
+  // ten separate crystals, not one buff that cannot repeat
   abilities: [maxModifier({ name: 'Mana Crystal', gauge: 'mana', add: 1 })],
 });
 

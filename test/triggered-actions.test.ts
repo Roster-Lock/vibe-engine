@@ -210,7 +210,6 @@ describe('one cause fires every event it causes', () => {
     const loop = buff({
       name: 'Loop',
       weight: 1,
-      stacks: true,
       abilities: [
         auto({
           name: 'Reapply',
@@ -373,7 +372,7 @@ describe('anything that can trigger an event triggers it', () => {
     { event: 'turn:end', why: 'a turn ends', cause: (e) => endTurn(e) },
     {
       event: 'gauge:changed',
-      why: 'a character takes damage',
+      why: 'a character is damaged',
       cause: (e, hero, goblin) => e.damage(goblin.gauge('hp'), 10, hero),
     },
     {
@@ -402,7 +401,6 @@ describe('anything that can trigger an event triggers it', () => {
         const loop = buff({
           name: 'Loop',
           weight: 1,
-          stacks: true,
           abilities: [
             auto({
               name: 'Reapply',
@@ -418,7 +416,7 @@ describe('anything that can trigger an event triggers it', () => {
     },
     {
       event: 'character:destroyed',
-      why: 'a character dies',
+      why: 'a character is destroyed',
       cause: (e, hero, goblin) => e.damage(goblin.gauge('hp'), 999, hero),
     },
     {
@@ -428,7 +426,7 @@ describe('anything that can trigger an event triggers it', () => {
     },
     {
       event: 'character:destroyed:batch',
-      why: 'a character dies (the batch variant)',
+      why: 'a character is destroyed (the batch variant)',
       cause: (e, hero, goblin) => e.damage(goblin.gauge('hp'), 999, hero),
     },
     {

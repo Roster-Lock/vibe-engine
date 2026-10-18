@@ -13,8 +13,7 @@ export const CARD_SAMPLES: readonly CardSample[] = [
     doc: `# A spell: no body line, just effect sentences. "target enemy
 # character" becomes the card's targeting pattern.
 Card Fireball
-Cost 4
-Spell
+{ "cost": 4, "type": "spell" }
 Deal 6 damage to target enemy character.
 `,
   },
@@ -23,8 +22,7 @@ Deal 6 damage to target enemy character.
     doc: `# "Creature <power>/<health>" gives the stat line; "Taunt." is a
 # keyword. Enemies must attack this before its allies.
 Card Shieldbearer
-Cost 2
-Creature 1/4
+{ "cost": 2, "type": "creature", "creatureConfig": { "power": 1, "health": 4 } }
 Taunt.
 `,
   },
@@ -34,8 +32,7 @@ Taunt.
 # zone a card resolves in, so this only fires on the normal cast.
 # It picks a target, so you choose it as the card is played.
 Card Elven Archer
-Cost 1
-Creature 1/1
+{ "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }
 When this enters play from active then Deal 1 damage to target enemy character.
 `,
   },
@@ -45,8 +42,7 @@ When this enters play from active then Deal 1 damage to target enemy character.
 # however the creature arrives. "from stack" would instead catch a
 # card cheated past resolution — name the zone to demand that path.
 Card Doomsayer
-Cost 4
-Creature 0/7
+{ "cost": 4, "type": "creature", "creatureConfig": { "power": 0, "health": 7 } }
 When this enters play from active then Deal 5 damage to all enemy characters.
 `,
   },
@@ -55,8 +51,7 @@ When this enters play from active then Deal 5 damage to all enemy characters.
     doc: `# No "target" phrase at all: the effect finds its own victims, so
 # nothing is targeted — taunt does not protect against it.
 Card Consecration
-Cost 4
-Spell
+{ "cost": 4, "type": "spell" }
 Deal 2 damage to all enemy characters.
 `,
   },
@@ -65,23 +60,22 @@ Deal 2 damage to all enemy characters.
     doc: `# Buffs are document-level, like in an ability document. This one
 # reduces the wearer's incoming damage — and the spell still hits.
 Card Frost Bolt
-Cost 2
-Spell
+{ "cost": 2, "type": "spell" }
 Deal 3 damage to target enemy character.
 Add Chilled to target enemy character.
 
-Buff Chilled (until end of turn)
+Buff Chilled
+Fading 0.
 Incoming damage is reduced by 1.
 `,
   },
   {
     title: 'Cursed Idol (on death)',
-    doc: `# "When this dies then …" is an ordinary trigger, so the creature
+    doc: `# "When this is destroyed then …" is an ordinary trigger, so the creature
 # answers its own destruction.
 Card Cursed Idol
-Cost 2
-Creature 2/1
-When this dies then Deal 2 damage to all enemy characters.
+{ "cost": 2, "type": "creature", "creatureConfig": { "power": 2, "health": 1 } }
+When this is destroyed then Deal 2 damage to all enemy characters.
 `,
   },
   {
@@ -89,11 +83,10 @@ When this dies then Deal 2 damage to all enemy characters.
     doc: `# Any other "When … then …" is a trigger the creature carries on
 # the board. This one grows when it is wounded.
 Card Gurubashi Berserker
-Cost 5
-Creature 2/7
-When this takes damage then add Berserker Rage to this.
+{ "cost": 5, "type": "creature", "creatureConfig": { "power": 2, "health": 7 } }
+When this is damaged then add Berserker Rage to this.
 
-Buff Berserker Rage (stacks)
+Buff Berserker Rage
 Outgoing damage is increased by 2.
 `,
   },
@@ -102,8 +95,7 @@ Outgoing damage is increased by 2.
     doc: `# Charge lets a creature attack the turn it lands. Vanilla
 # creatures are just a cost and a stat line.
 Card Wolfrider
-Cost 3
-Creature 3/1
+{ "cost": 3, "type": "creature", "creatureConfig": { "power": 3, "health": 1 } }
 Charge.
 `,
   },

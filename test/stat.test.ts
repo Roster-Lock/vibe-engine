@@ -107,7 +107,7 @@ describe('derived stats', () => {
     engine.registerCharacter(hero);
 
     await engine.addBuff(hero, staminaDrain);
-    expect(hero.gauge('hp').max).toBe(30); // no stamina gauge on this character — nothing to derive
+    expect(hero.gauge('hp').max).toBe(30); // no stamina gauge on this — nothing to derive
     expect(hero.gauge('mana').max).toBe(0);
   });
 

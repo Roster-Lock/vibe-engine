@@ -104,7 +104,7 @@ errors back to the author.
   discriminants are lowercase words — `'character'`, `'buff'`,
   `'skill'` — so the narrowing example reads like English. `Status` is
   now a real union (`Buff | Skill`) so narrowing reaches the buff-only
-  fields (`stacks`, `removedOnDefeat`). Guarded by
+  fields (`removedOnDefeat`). Guarded by
   `test/narrowing.test.ts` (checked by `npm run typecheck`).
 - ✅ **Events have no optional properties — they come in versions**
   (this session): an event that may or may not carry a fact (`source`,
@@ -121,7 +121,7 @@ errors back to the author.
   `docs/creator/01-ability-language.md`). Manual abilities are written as
   "Ability \<name\>" + effect sentences ("Destroy target enemy character.",
   "Deal 20 damage to all enemy characters.", "You lose the game."); custom
-  buffs are declared in the document itself (`Buff Frailty (stacks)`) and
+  buffs are declared in the document itself (`Buff Frailty`) and
   travel with it. A real lexer/parser produces span-accurate grammar
   diagnostics, future vocabulary ("whenever …", "this buff", summons) gets
   targeted "next milestone" hints, and every sentence compiles to engine
@@ -207,7 +207,7 @@ errors back to the author.
   instead" is one draw rule, not two), removable, and an action the host
   does not know fails loudly. Guarded by `test/card-game-rules.test.ts`.
   **Open:** the ability language cannot yet *write* a rule change — a
-  revealed card's "at the start of your turn, draw an extra card" needs a
+  revealed card's "when your turn starts then draw an extra card" needs a
   sentence that compiles to a `GameRule`, which is the language work the
   mechanism now unblocks.
 - ✅ **Buff durations and action modifiers** (this session): `Buff Mark
@@ -221,8 +221,8 @@ errors back to the author.
   damage-or-healing, gauge, a predicate on the target) and a **rewrite**
   on the change's **magnitude**, so authors never touch signs and two
   modifiers compose instead of overwriting. Stacking is free — the engine
-  runs every attached instance's modifier, so a `(stacks)` buff with "+5"
-  is +15 at three stacks with no per-stack arithmetic. `test/english.test.ts`
+  runs every attached instance's modifier, so a buff added three times with "+5"
+  is +15 with no per-stack arithmetic. `test/english.test.ts`
   asserts the English Rage produces **identical** results to the
   hand-written `passiveActionModifier` in
   `src/examples/08-27-2026/buffs/rage/index.ts`, at one stack and at three.

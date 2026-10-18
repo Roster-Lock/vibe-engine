@@ -153,8 +153,8 @@ describe('a frame-based scheduler', () => {
     const { engine, hero, foe } = arena(frames);
     // Two copies of the same listener: both are raised by one event, and
     // both run in the frame after it.
-    await engine.addBuff(hero, buff({ ...retaliate, stacks: true }));
-    await engine.addBuff(hero, buff({ ...retaliate, stacks: true }));
+    await engine.addBuff(hero, buff({ ...retaliate }));
+    await engine.addBuff(hero, buff({ ...retaliate }));
     await engine.apply([damage(foe.gauge('hp'), 1)]);
     expect(frames.pending).toBe(2);
     expect(await frames.tick()).toBe(2);

@@ -64,8 +64,7 @@ function warden(): Card {
   const { cards } = playableCards(
     [
       'Card Test Warden',
-      'Cost 1',
-      'Creature 1/1',
+      '{ "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }',
       'When this enters play from active then Deal 2 damage to all enemy characters.',
     ].join('\n'),
   );
@@ -75,7 +74,7 @@ function warden(): Card {
 /** A 1-cost instant bolt. */
 function bolt(): Card {
   const { cards } = playableCards(
-    ['Card Test Bolt', 'Cost 1', 'Spell', 'Deal 3 damage to target enemy character.'].join('\n'),
+    ['Card Test Bolt', '{ "cost": 1, "type": "spell" }', 'Deal 3 damage to target enemy character.'].join('\n'),
   );
   return instant(cards[0]!);
 }

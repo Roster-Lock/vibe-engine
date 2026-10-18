@@ -103,7 +103,6 @@ interface StatusDef {
 }
 
 interface BuffDef extends StatusDef {
-  stacks?: boolean;         // more than one instance may stack; default false
   removable?: boolean;      // false ⇒ removal is a no-op (an aura's mark); default true
   removedOnDefeat?: boolean;// removed when its *wearer* is defeated; default true
   // to react to its own end, the buff carries a buff:destroyed self-trigger
@@ -275,8 +274,8 @@ already missing the fallen buffs. Strictly wearer-scoped
    abilities in status order.
 2. `isDefeated` reflects HP only; `destroyed` is false until the engine's
    destroy phase sets it.
-3. Adding a buff creates a fresh instance (separate `vars`); a non-stackable
-   duplicate is refused silently; `stacks: true` allows duplicates.
+3. Adding a buff creates a fresh instance (separate `vars`); every add is its
+   own instance, because the order instances were added in can matter.
 4. `removeBuff` removes removable buffs by id or instance and is a no-op
    for `removable: false` buffs and skills.
 5. A buff with `removedOnDefeat: false` survives its wearer's destruction;

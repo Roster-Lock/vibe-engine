@@ -84,9 +84,9 @@ describe('grammar: sections and sentences', () => {
   it('accepts every effect shape from the language docs', () => {
     const result = compile(`
       Ability Kitchen Sink
-      Deal 3 damage to this character.
-      Heal this character for 5.
-      Heal 6 to target ally character.
+      Deal 3 damage to this.
+      Heal this for 5.
+      Heal target ally character for 6.
       Destroy all characters owned by you.
       Remove Thorns from all ally characters.
       You lose the game.
@@ -108,23 +108,24 @@ describe('grammar: sections and sentences', () => {
   it('parses buff declarations with options', () => {
     const result = compileDocument(`
       Ability Soul Rot
-      Buff Frailty (stacks)
-      Buff Heavy Curse (weight 3)
       Add Frailty to target enemy character.
-      Remove Heavy Curse from this character.
+      Remove Heavy Curse from this.
+
+      Buff Frailty
+      Buff Heavy Curse
+      Weight 3.
     `);
     expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     expect(result.buffs).toHaveLength(2);
     const frailty = result.buffs.find((b) => b.name === 'Frailty')!;
-    expect(frailty.stacks).toBe(true);
     expect(frailty.weight).toBe(1);
     const curse = result.buffs.find((b) => b.name === 'Heavy Curse')!;
     expect(curse.weight).toBe(3);
-    expect(curse.stacks).toBeUndefined();
+    expect(result.ir.buffs.find((b) => b.name === 'Heavy Curse')!.fading).toBeUndefined();
   });
 
   it('skips comment and blank lines', () => {
-    const result = compileDocument('# A comment\n\nAbility Clean\n# another\nDestroy this character.\n');
+    const result = compileDocument('# A comment\n\nAbility Clean\n# another\nDestroy this.\n');
     expect(result.diagnostics).toEqual([]);
     expect(result.doc.abilities).toHaveLength(1);
   });
@@ -132,20 +133,20 @@ describe('grammar: sections and sentences', () => {
   it('renders phrases back the way the player wrote them', () => {
     const result = compileDocument(`
       Ability Shapes
-      Destroy this character.
+      Destroy this.
       Destroy target enemy character.
       Destroy all characters owned by you.
       Destroy all other ally characters.
-      Heal all characters owned by the opponent for 3.
+      Heal all characters owned by opponents for 3.
     `);
     expect(result.diagnostics).toEqual([]);
     const summaries = result.doc.abilities[0]!.sentences.map(effectSummary);
     expect(summaries).toEqual([
-      'Destroy this character.',
+      'Destroy this.',
       'Destroy target enemy character.',
       'Destroy all characters owned by you.',
       'Destroy all other ally characters.',
-      'Heal all characters owned by the opponent for 3.',
+      'Heal all characters owned by opponents for 3.',
     ]);
   });
 });
@@ -153,19 +154,19 @@ describe('grammar: sections and sentences', () => {
 describe('cross-file definition index', () => {
   it('indexes all files before individual references are resolved', () => {
     const { index, parsed } = indexDocuments([
-      { filePath: 'ability.buff', text: 'Ability Bite\nAdd Poison to this character.' },
-      { filePath: 'poison.buff', text: 'Buff Poison (stacks)' },
+      { filePath: 'ability.buff', text: 'Ability Bite\nAdd Poison to this.' },
+      { filePath: 'poison.buff', text: 'Buff Poison' },
     ]);
 
     expect(parsed).toHaveLength(2);
-    expect(index.resolve('buff', 'Poison')).toEqual({ name: 'Poison', weight: 1, stacks: true });
+    expect(index.resolve('buff', 'Poison')).toEqual({ name: 'Poison', weight: 1 });
   });
 
   it('merges equivalent definitions and retains every source location', () => {
     const index = new DefinitionIndex();
-    const first = { name: 'Poison', weight: 1, stacks: true } as const;
+    const first = { name: 'Poison', weight: 1 } as const;
     index.add('buff', 'Poison', first, { filePath: 'poison.buff', line: 1 });
-    index.add('buff', 'poison', { name: 'Poison', weight: 1, stacks: true }, { filePath: 'venom.buff', line: 4 });
+    index.add('buff', 'poison', { name: 'Poison', weight: 1 }, { filePath: 'venom.buff', line: 4 });
 
     expect(index.candidates('buff', 'POISON')).toHaveLength(1);
     expect(index.candidates('buff', 'poison')?.[0]?.locations).toEqual([
@@ -195,12 +196,12 @@ describe('cross-file definition index', () => {
 
 describe('grammar: errors with spans', () => {
   it('requires a period to end a sentence', () => {
-    const diags = errors('Ability A\nDeal 5 damage to this character');
+    const diags = errors('Ability A\nDeal 5 damage to this');
     expect(diags.some((d) => d.code === 'syntax' && d.message.includes('expected "."'))).toBe(true);
   });
 
   it('reports an unknown verb at a sentence start', () => {
-    const diags = errors('Ability A\nFrobnicate this character.');
+    const diags = errors('Ability A\nFrobnicate this.');
     expect(diags.some((d) => d.code === 'syntax' && d.message.includes('Frobnicate'))).toBe(true);
   });
 
@@ -208,19 +209,19 @@ describe('grammar: errors with spans', () => {
     // An unsupported event verb names the ones that are supported, rather
     // than calling the whole sentence a future feature — the subject and
     // the trigger shape are understood.
-    const diags = errors('Ability A\nwhen this character attacks then deal 5 damage to all enemy characters.');
-    expect(diags.some((d) => d.code === 'unknown-event' && d.message.includes('"die"'))).toBe(true);
+    const diags = errors('Ability A\nwhen this attacks then deal 5 damage to all enemy characters.');
+    expect(diags.some((d) => d.code === 'unknown-event' && d.message.includes('"is destroyed"'))).toBe(true);
     const buffDiags = errors('Ability A\nDestroy this buff.');
     expect(buffDiags.some((d) => d.code === 'future-feature' && d.message.includes('buff-owned'))).toBe(true);
   });
 
   it('complains when a sentence has no ability or buff to belong to', () => {
-    const diags = errors('Ability A\nDestroy this character.\nimport Poison from "./Poison.buff"\nDestroy this character.');
+    const diags = errors('Ability A\nDestroy this.\nimport Poison from "./Poison.buff"\nDestroy this.');
     expect(diags.some((d) => d.code === 'no-ability')).toBe(true);
   });
 
   it('catches an unknown buff and hints at the declaration', () => {
-    const diags = errors('Ability A\nAdd Poisoned to this character.\n\nBuff Poison (stacks)');
+    const diags = errors('Ability A\nAdd Poisoned to this.\n\nBuff Poison');
     const unknown = diags.find((d) => d.code === 'unknown-buff')!;
     expect(unknown).toBeDefined();
     expect(unknown.message).toContain('Buff Poisoned');
@@ -242,15 +243,15 @@ describe('grammar: errors with spans', () => {
   });
 
   it('flags a buff declaration that shadows a built-in', () => {
-    const diags = errors('Ability A\nBuff Poison (stacks)\nAdd Poison to this character.');
+    const diags = errors('Ability A\nBuff Poison\nAdd Poison to this.');
     expect(diags.some((d) => d.code === 'buff-dup-builtin')).toBe(true);
   });
 
   it('warns about a declared buff nothing references', () => {
-    const diags = errors('Ability A\nBuff Frailty (stacks)\nDestroy this character.');
+    const diags = errors('Ability A\nDestroy this.\n\nBuff Frailty');
     expect(diags.some((d) => d.code === 'unused-buff' && d.severity === 'warning')).toBe(true);
     // ...and stays quiet when the buff is actually used.
-    const used = errors('Ability A\nBuff Frailty (stacks)\nAdd Frailty to this character.');
+    const used = errors('Ability A\nAdd Frailty to this.\n\nBuff Frailty');
     expect(used.some((d) => d.code === 'unused-buff')).toBe(false);
   });
 
@@ -259,9 +260,18 @@ describe('grammar: errors with spans', () => {
     expect(diags.some((d) => d.code === 'syntax' && d.message.includes('"All players'))).toBe(true);
   });
 
-  it('checks the buff-option parentheses', () => {
-    const diags = errors('Ability A\nBuff Frailty (stacks\nAdd Frailty to this character.');
-    expect(diags.some((d) => d.code === 'syntax' && d.message.includes('")"'))).toBe(true);
+  it('has no buff header options — Weight and Fading are keyword lines', () => {
+    for (const header of ['Buff Frailty (weight 2)', 'Buff Frailty (stacks)', 'Buff Frailty (fading 2)']) {
+      const diags = errors(`Ability A\nAdd Frailty to this.\n\n${header}`);
+      expect(diags.some((d) => d.code === 'syntax' && d.message.includes('keyword lines'))).toBe(true);
+    }
+  });
+
+  it('reads Weight as a keyword line, once', () => {
+    const result = compileDocument('Ability A\nAdd Frailty to this.\n\nBuff Frailty\nWeight 3.');
+    expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    expect(result.ir.buffs[0]!.weight).toBe(3);
+    expect(errors('Buff A\nWeight 1.\nWeight 2.').some((d) => d.message.includes('already has a "Weight"'))).toBe(true);
   });
 });
 
@@ -279,7 +289,7 @@ describe('triggers: when … then …', () => {
     ['2 to 5', 'character:destroyed:batch', { min: 2, max: 5 }],
     ['7 or less', 'character:destroyed:batch', { min: 1, max: 7 }],
   ])('compiles the count phrase "%s"', (phrase, event, range) => {
-    const ir = trigger(`when ${phrase} characters die then heal this character for 5.`);
+    const ir = trigger(`when ${phrase} characters are destroyed then heal this for 5.`);
     expect(ir.event).toBe(event);
     expect(ir.mode).toBe('batch');
     if (!range) {
@@ -300,7 +310,7 @@ describe('triggers: when … then …', () => {
     ['an even number of', 'even'],
     ['an odd number of', 'odd'],
   ])('compiles the parity count "%s"', (phrase, parity) => {
-    const ir = trigger(`when ${phrase} characters die then heal this for 5.`);
+    const ir = trigger(`when ${phrase} characters are destroyed then heal this for 5.`);
     expect(ir.event).toBe('character:destroyed:batch');
     expect(ir.when).toEqual({
       kind: 'parity',
@@ -310,27 +320,27 @@ describe('triggers: when … then …', () => {
   });
 
   it('a singular subject is the per-event trigger, with no count', () => {
-    const ir = trigger('when a character dies then heal this character for 5.');
+    const ir = trigger('when a character is destroyed then heal this for 5.');
     expect(ir.event).toBe('character:destroyed');
     expect(ir.mode).toBe('single');
     expect(ir.when).toBeUndefined();
   });
 
   it('a bare plural means "1 or more"', () => {
-    const ir = trigger('when characters survive then heal this character for 5.');
+    const ir = trigger('when characters survives then heal this for 5.');
     expect(ir.event).toBe('character:survived:batch');
     expect(ir.mode).toBe('batch');
     expect(ir.when).toBeUndefined();
   });
 
   it("the subject's adjective filters the triggering characters", () => {
-    const ir = trigger('when 2 or more enemy characters die then heal this character for 5.');
+    const ir = trigger('when 2 or more enemy characters are destroyed then heal this for 5.');
     expect(ir.filter).toEqual({ kind: 'relation', to: 'enemy' });
   });
 
   it('the subject takes ownership and "with" clauses, like any noun phrase', () => {
     const ir = trigger(
-      'when 2 or more characters owned by the opponent with hp < 10 die then heal this character for 5.',
+      'when 2 or more characters owned by opponents with hp < 10 are destroyed then heal this for 5.',
     );
     expect(ir.filter).toEqual({
       kind: 'and',
@@ -347,16 +357,16 @@ describe('triggers: when … then …', () => {
   });
 
   it('reads back as English, for the name and the preview', () => {
-    const ir = trigger('when 2 to 5 enemy characters die then deal 5 damage to all enemy characters.');
+    const ir = trigger('when 2 to 5 enemy characters are destroyed then deal 5 damage to all enemy characters.');
     expect(ir.name).toBe(
-      'When 2 to 5 enemy characters die, deal 5 damage to all enemy characters.',
+      'When 2 to 5 enemy characters are destroyed, deal 5 damage to all enemy characters.',
     );
   });
 
   it('a trigger inside a Buff is granted by the buff', () => {
     const result = compileDocument(`
       Buff Vengeance
-      when 2 or more enemy characters die then deal 5 damage to all enemy characters.
+      when 2 or more enemy characters are destroyed then deal 5 damage to all enemy characters.
 
       Ability Curse
       Add Vengeance to target ally character.
@@ -369,7 +379,7 @@ describe('triggers: when … then …', () => {
   });
 
   it('a trigger outside any Buff is handed to the host to place', () => {
-    const result = compileDocument('when a character dies then heal this character for 5.');
+    const result = compileDocument('when a character is destroyed then heal this for 5.');
     expect(result.ir.triggers).toHaveLength(1);
     expect(result.ir.triggers[0]!.scope).toBe('game');
     expect(result.triggers).toHaveLength(1);
@@ -379,7 +389,7 @@ describe('triggers: when … then …', () => {
   it('still accepts the turn prefix inside a Buff', () => {
     const result = compileDocument(`
       Buff Regeneration
-      When the turn starts, heal this character for 5.
+      When a turn starts then heal this for 5.
     `);
     expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     expect(result.ir.buffs[0]!.triggers.map((t) => t.event)).toEqual(['turn:start']);
@@ -396,24 +406,24 @@ describe('bare `this`', () => {
 
   it('is the same phrase as "this character"', () => {
     const bare = compileDocument('Destroy this.');
-    const spelled = compileDocument('Destroy this character.');
+    const spelled = compileDocument('Destroy this.');
     expect(bare.ir.abilities[0]!.steps).toEqual(spelled.ir.abilities[0]!.steps);
   });
 
   it('reads back as written', () => {
     const bare = compileDocument('Heal this for 5.');
-    const spelled = compileDocument('Heal this character for 5.');
+    const spelled = compileDocument('Heal this for 5.');
     expect(bare.abilities[0]!.description).toBe('Heal this for 5.');
-    expect(spelled.abilities[0]!.description).toBe('Heal this character for 5.');
+    expect(spelled.abilities[0]!.description).toBe('Heal this for 5.');
   });
 
   it('works as a trigger subject', () => {
-    const result = compileDocument('when this dies then deal 5 damage to all enemy characters.');
+    const result = compileDocument('when this is destroyed then deal 5 damage to all enemy characters.');
     expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     const ir = result.ir.triggers[0]!;
     expect(ir.mode).toBe('single');
     expect(ir.filter).toEqual({ kind: 'relation', to: 'self' });
-    expect(ir.name).toBe('When this dies, deal 5 damage to all enemy characters.');
+    expect(ir.name).toBe('When this is destroyed, deal 5 damage to all enemy characters.');
   });
 
   it('still requires a noun on a group — "all" does not say all what', () => {
@@ -423,32 +433,32 @@ describe('bare `this`', () => {
 });
 
 describe('triggers: diagnostics', () => {
-  it('points at the digit when a count is spelled out', () => {
-    const diags = errors('when one or more characters die then heal this for 5.');
-    expect(diags[0]!.code).toBe('count-word');
-    expect(diags[0]!.message).toContain('"1" instead of "one"');
+  it('does not read a spelled-out number as a count', () => {
+    const diags = errors('when one or more characters are destroyed then heal this for 5.');
+    expect(diags[0]!.code).not.toBe('count-word');
+    expect(diags.length).toBeGreaterThan(0);
   });
 
   it('names the event verbs it knows', () => {
-    const diags = errors('when 2 or more characters explode then heal this character for 5.');
+    const diags = errors('when 2 or more characters explode then heal this for 5.');
     expect(diags[0]!.code).toBe('unknown-event');
-    expect(diags[0]!.message).toContain('"die"');
-    expect(diags[0]!.message).toContain('"survive"');
+    expect(diags[0]!.message).toContain('"is destroyed"');
+    expect(diags[0]!.message).toContain('"survives"');
   });
 
   it('requires "then" before the effect', () => {
-    const diags = errors('when 2 or more characters die heal this character for 5.');
+    const diags = errors('when 2 or more characters are destroyed heal this for 5.');
     expect(diags[0]!.message).toContain('expected "then"');
   });
 
   it('rejects a backwards count range', () => {
-    const diags = errors('when 5 to 2 characters die then heal this character for 5.');
+    const diags = errors('when 5 to 2 characters are destroyed then heal this for 5.');
     expect(diags[0]!.code).toBe('count-range');
     expect(diags[0]!.message).toContain('the larger number goes last');
   });
 
   it('explains a bare number that is not a count phrase', () => {
-    const diags = errors('when 3 characters die then heal this character for 5.');
+    const diags = errors('when 3 characters are destroyed then heal this for 5.');
     expect(diags[0]!.message).toContain('"or more"');
   });
 });
@@ -478,7 +488,7 @@ describe('compile + run in the arena', () => {
 
   it('sacrifice: destroy this character and heal the others', async () => {
     const result = compileDocument(
-      'Ability Sacrifice\nDestroy this character.\nHeal all other ally characters for 25.',
+      'Ability Sacrifice\nDestroy this.\nHeal all other ally characters for 25.',
     );
     expect(result.diagnostics).toEqual([]);
     const arena = buildArena(result.abilities[0]!);
@@ -531,7 +541,7 @@ describe('compile + run in the arena', () => {
 
   it('adds a buff declared in the document itself', async () => {
     const result = compileDocument(
-      'Ability Soul Rot\nAdd Frailty to target enemy character.\n\nBuff Frailty (stacks)',
+      'Ability Soul Rot\nAdd Frailty to target enemy character.\n\nBuff Frailty',
     );
     expect(result.diagnostics).toEqual([]);
     expect(result.buffs[0]!.name).toBe('Frailty');
@@ -615,15 +625,12 @@ describe('completion', () => {
     );
     expect(completeAt('All ', 4).map((i) => i.label)).toContain('players');
     const verbs = completeAt('All players ', 12).map((i) => i.label);
-    expect(verbs).toEqual(expect.arrayContaining(['wins', 'loses']));
+    expect(verbs).toEqual(expect.arrayContaining(['win', 'lose']));
+    expect(verbs).not.toContain('wins');
   });
 
   it('offers nothing inside a free-form ability name', () => {
     expect(completeAt('Ability Fi', 10)).toEqual([]);
-  });
-
-  it('offers buff options inside the declaration parens', () => {
-    expect(completeAt('Buff X (s', 9).map((i) => i.label)).toEqual(['stacks']);
   });
 
   it('knows where one sentence ends and the next begins', () => {
@@ -645,7 +652,7 @@ describe('charsToString', () => {
       withClause: undefined,
       ...over,
     });
-    expect(charsToString(phrase({ quantifier: 'this' }))).toBe('this character');
+    expect(charsToString(phrase({ quantifier: 'this' }))).toBe('this');
     expect(charsToString(phrase({ quantifier: 'target', who: 'enemy' }))).toBe('target enemy character');
     expect(charsToString(phrase({ quantifier: 'all', owner: 'you' }))).toBe('all characters owned by you');
     expect(charsToString(phrase({ quantifier: 'all', other: true, who: 'ally' }))).toBe('all other ally characters');
@@ -679,7 +686,7 @@ describe('imports and parenthesized conditions', () => {
   });
 
   it('reports imports that the host cannot resolve', () => {
-    const result = compileDocument('import Missing from "./Missing.buff"\nAbility Bite\nAdd Missing to this character.');
+    const result = compileDocument('import Missing from "./Missing.buff"\nAbility Bite\nAdd Missing to this.');
     expect(result.diagnostics.some((d) => d.code === 'unknown-import')).toBe(true);
   });
 
@@ -796,7 +803,7 @@ describe('the "with" clause', () => {
   });
 
   it('counts a declared buff referenced only by a filter as used', () => {
-    const result = compileDocument('Ability Pestilence\nDestroy all enemy characters with Bleed.\n\nBuff Bleed (stacks)');
+    const result = compileDocument('Ability Pestilence\nDestroy all enemy characters with Bleed.\n\nBuff Bleed');
     expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     expect(result.diagnostics.some((d) => d.code === 'unused-buff')).toBe(false);
   });
@@ -804,7 +811,7 @@ describe('the "with" clause', () => {
   it('reports unknown buffs and impossible filters', () => {
     const unknown = errors('Ability A\nDestroy all enemy characters with Wobble.');
     expect(unknown.some((d) => d.code === 'unknown-buff')).toBe(true);
-    const selfFilter = errors('Ability A\nDestroy this character with hp < 10.');
+    const selfFilter = errors('Ability A\nDestroy this with hp < 10.');
     expect(selfFilter.some((d) => d.code === 'syntax' && d.message.includes('one character'))).toBe(true);
     const missingOp = errors('Ability A\nDestroy all enemy characters with hp 10.');
     expect(missingOp.some((d) => d.code === 'syntax' && d.message.includes('comparison'))).toBe(true);
@@ -845,12 +852,12 @@ describe('three or more "with" conditions', () => {
     );
   });
 
-  it('accepts comma separators between conditions', () => {
-    const result = compile(
-      'Ability Mixed\nDestroy all enemy characters with poison, thorns, and hp <= 40.',
-    );
-    expect(result.diagnostics).toEqual([]);
-    expect(result.doc.abilities[0]!.sentences[0]!.kind).toBe('destroy');
+  it('does not read a comma as a joiner — conditions are joined by "and" / "or" only', () => {
+    const comma = compile('Ability Mixed\nDestroy all enemy characters with poison, thorns, and hp <= 40.');
+    expect(comma.diagnostics.some((d) => d.severity === 'error')).toBe(true);
+    const words = compile('Ability Mixed\nDestroy all enemy characters with poison and thorns and hp <= 40.');
+    expect(words.diagnostics).toEqual([]);
+    expect(words.doc.abilities[0]!.sentences[0]!.kind).toBe('destroy');
   });
 
   it('resolves every buff condition against the dictionary', () => {
@@ -926,16 +933,6 @@ describe('"or" in "with" clauses', () => {
     expect(charsToString(sentence.chars)).toBe('all enemy characters with Poison or Thorns and hp <= 40');
   });
 
-  it('treats commas as "and", even before an "or"', () => {
-    const result = compile(
-      'Ability Mixed\nDestroy all enemy characters with poison, thorns, or hp <= 40.',
-    );
-    expect(result.diagnostics).toEqual([]);
-    const clause = result.doc.abilities[0]!.sentences[0]!;
-    if (clause.kind !== 'destroy') throw new Error('unreachable');
-    expect([...clause.chars.withClause!.joiners]).toEqual(['and', 'or']);
-  });
-
   it('a lone "or" branch matches on its own (buff side)', async () => {
     const result = compile(
       'Ability Hex\nDestroy all enemy characters with poison or thorns and hp <= 40.',
@@ -992,7 +989,7 @@ describe('buff names: display spelling and inspection', () => {
   it('supports multi-word buff names end to end', async () => {
     // Adding a multi-word declared buff.
     const add = compileDocument(
-      'Ability Tentacle Sweep\nAdd toxic tentacles to target enemy character.\n\nBuff Toxic Tentacles (stacks)',
+      'Ability Tentacle Sweep\nAdd toxic tentacles to target enemy character.\n\nBuff Toxic Tentacles',
     );
     expect(add.diagnostics).toEqual([]);
     expect(add.abilities[0]!.description).toBe('Add Toxic Tentacles to target enemy character.');
@@ -1003,7 +1000,7 @@ describe('buff names: display spelling and inspection', () => {
     // Filtering on the same multi-word buff (seeded before the cast —
     // filters see the state at cast time, before the cast's own effects).
     const wipe = compileDocument(
-      'Ability Sweep\nDestroy all enemy characters with toxic tentacles.\n\nBuff Toxic Tentacles (stacks)',
+      'Ability Sweep\nDestroy all enemy characters with toxic tentacles.\n\nBuff Toxic Tentacles',
     );
     expect(wipe.diagnostics).toEqual([]);
     const wipeArena = buildArena(wipe.abilities[0]!);
@@ -1019,7 +1016,7 @@ describe('buff names: display spelling and inspection', () => {
     const labels = atEnd(doc);
     expect(labels).toContain('Poison'); // built-ins offered
     // Typing mid-name matches from any word boundary.
-    const text = 'Ability X\nAdd Toxic tentacl\n\nBuff Toxic Tentacles (stacks)';
+    const text = 'Ability X\nAdd Toxic tentacl\n\nBuff Toxic Tentacles';
     const partial = completeAt(text, text.indexOf('tentacl') + 'tentacl'.length, dict).map((i) => i.label);
     expect(partial).toContain('Toxic Tentacles');
   });
@@ -1028,9 +1025,9 @@ describe('buff names: display spelling and inspection', () => {
     const text = [
       'Ability A',
       'Add toxic tentacles to target enemy character.',
-      'Remove poison from this character.',
+      'Remove poison from this.',
       '',
-      'Buff Toxic Tentacles (stacks)',
+      'Buff Toxic Tentacles',
     ].join('\n');
     const decl = buffReferenceInfo(text, text.indexOf('Toxic Tentacles'), { dictionary: dict });
     expect(decl).toMatchObject({ name: 'Toxic Tentacles', declared: true });
@@ -1044,26 +1041,24 @@ describe('buff names: display spelling and inspection', () => {
   });
 
   it('describes declared and built-in buffs', () => {
-    const text = 'Ability A\nAdd Toxic Tentacles to this character.\n\nBuff Toxic Tentacles (stacks)';
+    const text = 'Ability A\nAdd Toxic Tentacles to this.\n\nBuff Toxic Tentacles';
     const declared = buffReferenceInfo(text, text.indexOf('Toxic Tentacles', 10), { dictionary: dict })!;
     const declaredText = describeBuffReference(declared);
     expect(declaredText).toContain('Toxic Tentacles');
     expect(declaredText).toContain('declared in this document');
-    expect(declaredText).toContain('stackable');
 
-    const builtin = buffReferenceInfo('Ability A\nAdd Poison to this character.', 'Ability A\nAdd '.length, { dictionary: dict })!;
+    const builtin = buffReferenceInfo('Ability A\nAdd Poison to this.', 'Ability A\nAdd '.length, { dictionary: dict })!;
     const builtinText = describeBuffReference(builtin);
     expect(builtinText).toContain('Poison');
     expect(builtinText).toContain('built-in');
     expect(builtinText).toContain('turn:start'); // Poison's tick trigger
-    expect(builtinText).toContain('stackable');
   });
 });
 
 describe('multi-step abilities (sentences see earlier sentences)', () => {
   it('the Add-then-Destroy combo wipes the board', async () => {
     const result = compileDocument(
-      'Ability Plague\nAdd Poison to all enemy characters.\nDestroy all enemy characters with poison.\n\nBuff Poison (stacks)',
+      'Ability Plague\nAdd Poison to all enemy characters.\nDestroy all enemy characters with poison.\n\nBuff Poison',
     );
     expect(result.diagnostics).toEqual([]);
     const arena = buildArena(result.abilities[0]!);
@@ -1090,7 +1085,7 @@ describe('multi-step abilities (sentences see earlier sentences)', () => {
   it('single-sentence abilities keep firing as one apply', async () => {
     // The Venom sample is a single sentence — poison lands, then the turn
     // tick fires as before (no per-step split for one sentence).
-    const result = compileDocument('Ability Venom Strike\nAdd Poison to target enemy character.\nBuff Poison (stacks)');
+    const result = compileDocument('Ability Venom Strike\nAdd Poison to target enemy character.\nBuff Poison');
     const arena = buildArena(result.abilities[0]!);
     await runArena(arena, result.abilities[0]!);
     expect(arena.goblin.hasStatus('poison')).toBe(true);
@@ -1103,8 +1098,8 @@ describe('buff event listeners and triggers in DSL', () => {
       'Ability Venom Strike',
       'Add Poison to target enemy character.',
       '',
-      'Buff Poison (stacks)',
-      'When the turn starts, deal 10 damage to this character.',
+      'Buff Poison',
+      'When a turn starts then deal 10 damage to this.',
     ].join('\n');
 
     const result = compileDocument(docText);
@@ -1125,13 +1120,13 @@ describe('buff event listeners and triggers in DSL', () => {
     expect(arena.goblin.gauge('hp').current).toBe(20);
   });
 
-  it('supports "when the turn ends," prefix event trigger', async () => {
+  it('supports "when a turn ends then" prefix event trigger', async () => {
     const docText = [
       'Ability Burn',
       'Add Flame to target enemy character.',
       '',
-      'Buff Flame (stacks)',
-      'When the turn ends, deal 15 damage to this character.',
+      'Buff Flame',
+      'When a turn ends then deal 15 damage to this.',
     ].join('\n');
 
     const result = compileDocument(docText);
@@ -1152,7 +1147,7 @@ describe('triggers: running in the arena', () => {
     // more enemies die in one batch, every enemy takes 5.
     const result = compileDocument(`
       Buff Vengeance
-      when 2 or more enemy characters die then deal 5 damage to all enemy characters.
+      when 2 or more enemy characters are destroyed then deal 5 damage to all enemy characters.
 
       Ability Wrath
       Deal 40 damage to all enemy characters.
@@ -1179,7 +1174,7 @@ describe('triggers: running in the arena', () => {
     const result = compileDocument(`
       Buff Mark
       Buff Vengeance
-      when 2 or more enemy characters survive then Add Mark to all enemy characters.
+      when 2 or more enemy characters survives then Add Mark to all enemy characters.
 
       Ability Sting
       Deal 10 damage to all enemy characters.
@@ -1202,7 +1197,7 @@ describe('triggers: running in the arena', () => {
     const result = compileDocument(`
       Buff Mark
       Buff Vengeance
-      when 3 or more enemy characters survive then Add Mark to all enemy characters.
+      when 3 or more enemy characters survives then Add Mark to all enemy characters.
 
       Ability Sting
       Deal 10 damage to all enemy characters.
@@ -1217,7 +1212,7 @@ describe('triggers: running in the arena', () => {
 
   it('a document-level trigger runs once the host places it', async () => {
     const result = compileDocument(`
-      when a character dies then deal 3 damage to all ally characters.
+      when a character is destroyed then deal 3 damage to all ally characters.
 
       Ability Wrath
       Deal 40 damage to all enemy characters.
@@ -1316,7 +1311,7 @@ describe('if: conditional effects', () => {
 
   it('works inside a trigger\'s effect', () => {
     const result = compileDocument(
-      'when a character dies then if this has hp < 150, heal this for 5.',
+      'when a character is destroyed then if this has hp < 150, heal this for 5.',
     );
     expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     expect(result.ir.triggers[0]!.steps[0]!.when).toBeDefined();
@@ -1619,32 +1614,40 @@ describe('buff durations', () => {
   }
 
   const mark = (options: string) => `
-    Buff Mark (${options})
+    Buff Mark${options ? ` (${options})` : ''}
     Ability Brand
     Add Mark to target enemy character.
   `;
 
-  it('"until end of turn" removes the buff at the turn\'s end', async () => {
-    const { before, after } = await play(mark('until end of turn'), 1);
+  const fading = (n: number) => `
+    Buff Mark
+    Fading ${n}.
+    Ability Brand
+    Add Mark to target enemy character.
+  `;
+
+  it('"Fading 0." removes the buff at the first turn\'s end', async () => {
+    const { before, after } = await play(fading(0), 1);
     expect(before).toContain('Mark');
     expect(after[0]).not.toContain('Mark');
   });
 
   it('without a duration the buff stays', async () => {
-    const { before, after } = await play(mark('weight 1'), 2);
+    const { before, after } = await play(mark(''), 2);
     expect(before).toContain('Mark');
     expect(after[1]).toContain('Mark');
   });
 
-  it('"for 2 turns" survives one turn-end and goes on the second', async () => {
-    const { after } = await play(mark('for 2 turns'), 2);
+  it('"Fading 1." survives one turn-end and goes on the second', async () => {
+    const { after } = await play(fading(1), 2);
     expect(after[0]).toContain('Mark');
     expect(after[1]).not.toContain('Mark');
   });
 
   it('every stack of a duration buff expires together', async () => {
     const result = compileDocument(`
-      Buff Mark (stacks, until end of turn)
+      Buff Mark
+      Fading 0.
       Ability Brand
       Add Mark to target enemy character.
       Add Mark to target enemy character.
@@ -1659,16 +1662,36 @@ describe('buff durations', () => {
     expect(arena.goblin.statuses.filter((status) => status.name === 'Mark')).toHaveLength(0);
   });
 
-  it('lowers to a duration on the buff, not an engine concept', () => {
-    const result = compileDocument(mark('until end of turn'));
-    expect(result.ir.buffs[0]!.duration).toEqual({ kind: 'endOfTurn' });
+  it('lowers to counters on the buff, not an engine concept', () => {
+    const result = compileDocument(fading(2));
+    expect(result.ir.buffs[0]!.fading).toBe(2);
     // The engine has no expiry: it became an ordinary ability on the buff.
-    expect(result.buffs[0]!.abilities?.map((a) => a.name)).toEqual(['Mark expires']);
+    expect(result.buffs[0]!.abilities?.map((a) => a.name)).toEqual(['Mark fades']);
   });
 
-  it('rejects a zero-turn duration and names the other options', () => {
-    expect(errors(mark('for 0 turns'))[0]!.code).toBe('duration-zero');
-    expect(errors(mark('forever'))[0]!.message).toContain('until end of turn');
+  it('keeps Fading to one line under a buff', () => {
+    expect(errors('Fading 2.')[0]!.message).toMatch(/under a "Buff/);
+    expect(errors('Buff A\nFading 1.\nFading 2.').some((d) => d.message.includes('already has a "Fading"'))).toBe(true);
+  });
+
+  it('requires a "When a turn starts then" trigger on a buff sentence', () => {
+    const diags = errors('Buff Regeneration\nHeal this for 5.');
+    expect(diags.some((d) => d.code === 'buff-sentence-event')).toBe(true);
+    expect(errors('Ability A\nAdd Regeneration to this.\n\nBuff Regeneration\nWhen a turn starts then heal this for 5.')).toEqual([]);
+    expect(errors('Ability A\nAdd R to this.\n\nBuff R\nWhen your turn ends then heal this for 5.')).toEqual([]);
+  });
+
+  it('points the retired turn spellings at the trigger form', () => {
+    for (const old of ['When the turn starts, heal this for 5.', 'At the start of your turn, heal this for 5.']) {
+      const diags = errors(`Ability A\nAdd R to this.\n\nBuff R\n${old}`);
+      expect(diags.some((d) => d.message.includes('then'))).toBe(true);
+    }
+  });
+
+  it('points the old header spellings at the keyword lines', () => {
+    for (const option of ['until end of turn', 'for 2 turns', 'stacks', 'fading 2', 'forever']) {
+      expect(errors(mark(option))[0]!.message).toContain('keyword lines');
+    }
   });
 });
 
@@ -1692,20 +1715,20 @@ describe('action modifiers', () => {
   }
 
   it('Rage: increases outgoing damage — the buff this language could not write', async () => {
-    const arena = await strike('Buff Rage (stacks)\n      Outgoing damage is increased by 5.');
+    const arena = await strike('Buff Rage\n      Outgoing damage is increased by 5.');
     expect(arena.goblin.gauge('hp').current).toBe(40 - 25);
   });
 
   it('every stack applies, with no per-stack arithmetic to write', async () => {
     // The engine runs each attached instance's modifier in turn, so
     // stacking is free: three stacks of "+5" is +15.
-    const arena = await strike('Buff Rage (stacks)\n      Outgoing damage is increased by 5.', 3);
+    const arena = await strike('Buff Rage\n      Outgoing damage is increased by 5.', 3);
     expect(arena.goblin.gauge('hp').current).toBe(40 - 35);
   });
 
   it('leaves healing alone', async () => {
     const result = compileDocument(`
-      Buff Rage (stacks)
+      Buff Rage
       Outgoing damage is increased by 5.
 
       Ability Mend
@@ -1723,7 +1746,7 @@ describe('action modifiers', () => {
     // "Damage you deal" means to something else — a self-inflicted cost is
     // not outgoing damage.
     const result = compileDocument(`
-      Buff Rage (stacks)
+      Buff Rage
       Outgoing damage is increased by 5.
 
       Ability Sacrifice
@@ -1927,7 +1950,7 @@ describe('action modifiers', () => {
     // this language could not express. Same ability, same board, both
     // buffs: the results must agree, at one stack and at three.
     const doc = compileDocument(`
-      Buff Rage (stacks)
+      Buff Rage
       Outgoing damage is increased by 5.
 
       Ability Strike
@@ -1946,7 +1969,7 @@ describe('action modifiers', () => {
   });
 
   it('lowers to a match and a rewrite', () => {
-    const result = compileDocument('Buff Rage (stacks)\nOutgoing damage is increased by 5.');
+    const result = compileDocument('Buff Rage\nOutgoing damage is increased by 5.');
     expect(result.ir.buffs[0]!.modifiers).toEqual([
       {
         id: 'rage-modifier-0',
@@ -2125,14 +2148,13 @@ describe('a formula wherever a number is expected', () => {
     expect(arena.goblin.gauge('hp').current).toBe(40 - 10);
   });
 
-  it('Heal accepts a formula in both word orders', async () => {
+  it('Heal accepts a formula, and points an amount-first sentence at the one word order', async () => {
     const forOrder = compileDocument(
       'Ability Mend\nHeal target ally character for (2 + 3).',
     );
-    const toOrder = compileDocument(
-      'Ability Mend\nHeal (2 + 3) to target ally character.',
-    );
-    for (const result of [forOrder, toOrder]) {
+    const toOrder = compileDocument('Ability Mend\nHeal (2 + 3) to target ally character.');
+    expect(toOrder.diagnostics.map((d) => d.message)[0]).toMatch(/write the characters first/);
+    for (const result of [forOrder]) {
       expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
       const ability = result.abilities[0]!;
       const arena = buildArena(ability);
@@ -2439,11 +2461,11 @@ describe('`damage` is the life gauge, not every gauge', () => {
     expect(dancer.gauge('stamina').current).toBe(14);
   });
 
-  it('`when this takes damage` watches the life gauge', async () => {
+  it('`when this is damaged` watches the life gauge', async () => {
     // The third site that meant 'hp': the trigger's event filter. Thorns
     // never fired at all on a character whose life gauge is not hp.
     const doc = compileDocument(
-      'Buff Thorns\nwhen this takes damage then deal 3 damage to the source character.',
+      'Buff Thorns\nwhen this is damaged then deal 3 damage to the source.',
     );
     expect(doc.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     const dancer = new Character('Dancer', {
@@ -2490,15 +2512,16 @@ describe('`damage` is the life gauge, not every gauge', () => {
   });
 });
 
-describe('takes damage, and the source', () => {
+describe('is damaged, and the source', () => {
   it('matches the hand-written TypeScript Thorns exactly', async () => {
     // src/examples/08-27-2026/buffs/thorns/index.ts is the same buff as an
     // `auto` closure that narrows `'source' in ctx.event`, checks
     // `wasTakenBy`, and excludes self-inflicted damage. Same ability, same
     // board, both buffs: the results must agree.
     const doc = compileDocument(`
-      Buff Thorns (weight 2)
-      when this takes damage then deal 8 damage to the source character.
+      Buff Thorns
+      Weight 2.
+      when this is damaged then deal 8 damage to the source.
 
       Ability Strike
       Deal 10 damage to target enemy character.
@@ -2518,10 +2541,10 @@ describe('takes damage, and the source', () => {
   });
 
   it('lowers to a gauge event with a direction, since damage is not its own event', () => {
-    const result = compileDocument('Buff T\nwhen this takes damage then deal 8 damage to the source character.');
+    const result = compileDocument('Buff T\nwhen this is damaged then deal 8 damage to the source.');
     const ir = result.ir.buffs[0]!.triggers[0]!;
     expect(ir.event).toBe('gauge:changed');
-    // "takes damage" watches the triggering entity's life gauge, resolved
+    // "is damaged" watches the triggering entity's life gauge, resolved
     // per event — not a hard-coded 'hp'.
     expect(ir.gauge).toEqual({ kind: 'life' });
     expect(ir.change).toBe('damage');
@@ -2537,7 +2560,7 @@ describe('takes damage, and the source', () => {
   it('ignores healing, and the other gauges', async () => {
     const doc = compileDocument(`
       Buff Thorns
-      when this takes damage then deal 8 damage to the source character.
+      when this is damaged then deal 8 damage to the source.
 
       Ability Mend
       Heal all other ally characters for 10.
@@ -2554,7 +2577,7 @@ describe('takes damage, and the source', () => {
   it('a self-inflicted cost has no source to retaliate against', async () => {
     const doc = compileDocument(`
       Buff Thorns
-      when this takes damage then deal 8 damage to the source character.
+      when this is damaged then deal 8 damage to the source.
 
       Ability Sacrifice
       Deal 10 damage to this.
@@ -2569,40 +2592,39 @@ describe('takes damage, and the source', () => {
   });
 
   it('"is healed" is the other direction', () => {
-    const result = compileDocument('Buff T\nwhen this is healed then deal 1 damage to the source character.');
+    const result = compileDocument('Buff T\nwhen this is healed then deal 1 damage to the source.');
     expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     expect(result.ir.buffs[0]!.triggers[0]!.change).toBe('heal');
   });
 
   it('reads back as English', () => {
-    const result = compileDocument('Buff T\nwhen this takes damage then deal 8 damage to the source character.');
+    const result = compileDocument('Buff T\nwhen this is damaged then deal 8 damage to the source.');
     expect(result.ir.buffs[0]!.triggers[0]!.name).toBe(
-      'When this takes damage, deal 8 damage to the source character.',
+      'When this is damaged, deal 8 damage to the source.',
     );
   });
 
-  it('requires the kind, since an event\'s cause may be a character or a buff', () => {
-    const diags = errors('Buff T\nwhen this takes damage then deal 8 damage to the source.');
-    expect(diags[0]!.code).toBe('source-kind');
-    expect(diags[0]!.message).toContain('"the source character"');
+  it('takes no noun: "the source" is the character that caused the event', () => {
+    for (const noun of ['character', 'player']) {
+      const diags = errors(`Buff T\nwhen this is damaged then deal 8 damage to the source ${noun}.`);
+      expect(diags[0]!.message).toContain('"the source" alone');
+    }
   });
 
-  it('names the player case as not yet possible', () => {
-    const diags = errors('Buff T\nwhen this takes damage then deal 8 damage to the source player.');
+  it('names a buff as the source as not yet possible', () => {
+    const diags = errors('Buff T\nwhen this is damaged then deal 8 damage to the source buff.');
     expect(diags[0]!.code).toBe('future-feature');
-    expect(diags[0]!.message).toContain('characters and buffs');
   });
 
   it('a buff-sourced trigger answers buffs, not characters', async () => {
-    // Poison's tick is sourced to the buff, so a card that answers
-    // characters does not see it — which is exactly what writing the kind
-    // makes visible.
+    // Poison's tick is sourced to the buff, so "the source" — which is
+    // always a character — does not see it.
     const result = compileDocument(`
       Buff Thorns
-      when this takes damage then deal 8 damage to the source character.
+      when this is damaged then deal 8 damage to the source.
 
       Buff Poison
-      When the turn starts, deal 3 damage to this.
+      When a turn starts then deal 3 damage to this.
 
       Ability Afflict
       Add Poison to target enemy character.
@@ -2617,5 +2639,77 @@ describe('takes damage, and the source', () => {
     // a buff, and this Thorns answers characters.
     expect(arena.goblin.gauge('hp').current).toBeLessThan(40);
     expect(arena.hero.gauge('hp').current).toBe(100);
+  });
+});
+describe('`this` takes no noun', () => {
+  it.each(['Destroy this character.', 'Reveal this card.', 'Move this card to its owner\'s garbage.'])(
+    '%s is an error pointing at the bare form',
+    (sentence) => {
+      const result = compileDocument(`Ability A\n${sentence}`);
+      expect(result.diagnostics.some((d) => d.severity === 'error')).toBe(true);
+    },
+  );
+});
+
+describe('gauge words come from the game', () => {
+  it('uses the gauges the host declares instead of hp and mana', () => {
+    const options = { gauges: ['loyalty', 'energy'] };
+    const ok = compileDocument('Ability A\nDestroy all enemy characters with loyalty < 3.', options);
+    expect(ok.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    const modifier = compileDocument('Buff Ward\nIncoming energy loss is prevented.\n\nAbility A\nAdd Ward to this.', options);
+    expect(modifier.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    // `hp` is no longer a gauge word here, so it reads as a buff name.
+    const hp = compileDocument('Ability A\nDestroy all enemy characters with hp < 3.', options);
+    expect(hp.diagnostics.some((d) => d.severity === 'error')).toBe(true);
+  });
+
+  it('offers the game\'s gauges after "with"', () => {
+    const labels = completeAt('Ability A\nDestroy all enemy characters with ', 44, undefined, undefined, ['loyalty']).map((i) => i.label);
+    expect(labels).toContain('loyalty');
+    expect(labels).not.toContain('hp');
+  });
+});
+
+describe('one verb form for survives', () => {
+  it('accepts "survives" for a single character and a counted group, and rejects "survive"', () => {
+    for (const subject of ['this', 'a character', '2 or more enemy characters']) {
+      const ok = compileDocument(`when ${subject} survives then heal this for 5.`);
+      expect(ok.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    }
+    const plural = compileDocument('when 2 or more characters survive then heal this for 5.');
+    expect(plural.diagnostics[0]?.code).toBe('unknown-event');
+    expect(plural.diagnostics[0]?.message).toContain('"survives"');
+  });
+});
+
+describe('one verb form for enters and leaves', () => {
+  it('accepts the singular spelling for any subject and rejects the plural', () => {
+    for (const sentence of [
+      'when 2 or more characters enters play then heal this for 5.',
+      'when this leaves play then heal this for 5.',
+    ]) {
+      expect(compileDocument(sentence).diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    }
+    for (const sentence of [
+      'when 2 or more characters enter play then heal this for 5.',
+      'when 2 or more characters leave play then heal this for 5.',
+    ]) {
+      expect(compileDocument(sentence).diagnostics[0]?.code).toBe('unknown-event');
+    }
+  });
+});
+
+describe('is damaged / are damaged', () => {
+  it('reads like is healed, and "takes damage" is no longer a verb', () => {
+    for (const sentence of [
+      'when this is damaged then heal this for 1.',
+      'when a character is damaged then heal this for 1.',
+      'when 2 or more characters are damaged then heal this for 1.',
+    ]) {
+      expect(compileDocument(sentence).diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
+    }
+    const old = compileDocument('when this takes damage then heal this for 1.');
+    expect(old.diagnostics[0]?.code).toBe('unknown-event');
+    expect(old.diagnostics[0]?.message).toContain('"is damaged"');
   });
 });

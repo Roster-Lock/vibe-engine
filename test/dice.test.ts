@@ -103,38 +103,40 @@ async function run(text: string, dice: readonly number[]) {
 }
 
 describe('dice in English', () => {
-  it('rolls 2d6 and deals that total', async () => {
-    expect(await run('Ability Gamble\nRoll 2d6.\nDeal that total damage to this character.', [3, 4])).toBe(93);
+  it('rolls 2d6 and deals that value', async () => {
+    expect(await run('Ability Gamble\nRoll 2d6.\nDeal that value damage to this.', [3, 4])).toBe(93);
   });
 
   it('reads the highest and the lowest die', async () => {
-    expect(await run('Ability Gamble\nRoll 3d6.\nDeal that highest die damage to this character.', [2, 6, 3])).toBe(94);
-    expect(await run('Ability Gamble\nRoll 3d6.\nDeal that lowest die damage to this character.', [2, 6, 3])).toBe(98);
+    expect(await run('Ability Gamble\nRoll 3d6.\nDeal that highest die damage to this.', [2, 6, 3])).toBe(94);
+    expect(await run('Ability Gamble\nRoll 3d6.\nDeal that lowest die damage to this.', [2, 6, 3])).toBe(98);
   });
 
-  it('accepts total, value and result as the same thing', async () => {
-    for (const word of ['total', 'value', 'result']) {
-      expect(await run(`Ability Gamble\nRoll a d20.\nDeal that ${word} damage to this character.`, [15])).toBe(85);
+  it('reads the outcome as "that value"; "total" and "result" are not roll words', async () => {
+    expect(await run('Ability Gamble\nRoll a d20.\nDeal that value damage to this.', [15])).toBe(85);
+    for (const word of ['total', 'result']) {
+      const messages = compile(`Ability Gamble\nRoll a d20.\nDeal that ${word} damage to this.`).diagnostics.map((d) => d.message);
+      expect(messages[0]).toMatch(/write "that value"/);
     }
   });
 
   it('uses the outcome in a formula', async () => {
-    expect(await run('Ability Gamble\nRoll a d6.\nDeal (roll.total * 2) damage to this character.', [4])).toBe(92);
+    expect(await run('Ability Gamble\nRoll a d6.\nDeal (roll.total * 2) damage to this.', [4])).toBe(92);
   });
 
   it('reads 0 before anything has been rolled, instead of failing', async () => {
-    expect(await run('Ability Gamble\nDeal that total damage to this character.', [5])).toBe(100);
+    expect(await run('Ability Gamble\nDeal that value damage to this.', [5])).toBe(100);
   });
 
   it('keeps a roll for the whole ability, so two sentences use the same dice', async () => {
     expect(
-      await run('Ability Gamble\nRoll 2d6.\nDeal that total damage to this character.\nDeal that total damage to this character.', [3, 4]),
+      await run('Ability Gamble\nRoll 2d6.\nDeal that value damage to this.\nDeal that value damage to this.', [3, 4]),
     ).toBe(86);
   });
 
   it('has no "the total": it says what to write instead', () => {
-    const messages = compile('Ability A\nRoll a d6.\nDeal the total damage to this character.').diagnostics.map((d) => d.message);
-    expect(messages[0]).toMatch(/write "that total" — "that" is always the most recent roll.*Store that value as AttackerRoll/);
+    const messages = compile('Ability A\nRoll a d6.\nDeal the total damage to this.').diagnostics.map((d) => d.message);
+    expect(messages[0]).toMatch(/write "that value" — "that" is always the most recent roll.*Store that value as AttackerRoll/);
   });
 
   it('rejects dice that are not dice', () => {
@@ -146,7 +148,7 @@ describe('dice in English', () => {
   });
 
   it('round-trips through the IR and renders its own words back', () => {
-    const text = 'Ability Gamble\nRoll 2d6.\nDeal that total damage to this character.\nRoll a d20.\nDeal that lowest die damage to this character.';
+    const text = 'Ability Gamble\nRoll 2d6.\nDeal that value damage to this.\nRoll a d20.\nDeal that lowest die damage to this.';
     const ir = lowerDocument(parseDocument(text).doc);
     expect(ir.abilities[0]!.steps[0]!.effects[0]).toEqual({
       kind: 'roll',
@@ -157,9 +159,9 @@ describe('dice in English', () => {
     const { text: rendered, gaps } = renderDocument(ir);
     expect(gaps).toEqual([]);
     expect(rendered).toContain('Roll 2d6.');
-    expect(rendered).toContain('Deal that total damage to this character.');
+    expect(rendered).toContain('Deal that value damage to this.');
     expect(rendered).toContain('Roll a d20.');
-    expect(rendered).toContain('Deal that lowest die damage to this character.');
+    expect(rendered).toContain('Deal that lowest die damage to this.');
     const again = lowerDocument(parseDocument(rendered).doc);
     expect(again.abilities[0]!.steps).toEqual(ir.abilities[0]!.steps);
     expect(renderDocument(again).text).toBe(rendered);
@@ -187,7 +189,7 @@ describe('several rolls: "that" is the latest, and a stored value keeps an earli
 
   it('"that" always means the most recent roll', async () => {
     const hp = await runRolls(
-      text('Roll a d6.', 'Roll a d20.', 'Deal that value damage to this character.'),
+      text('Roll a d6.', 'Roll a d20.', 'Deal that value damage to this.'),
       [[4], [15]],
     );
     expect(hp).toBe(100 - 15);
@@ -200,8 +202,8 @@ describe('several rolls: "that" is the latest, and a stored value keeps an earli
         'Store that value as AttackerRoll.',
         'Roll a d20.',
         'Store that value as DefenderRoll.',
-        'Deal AttackerRoll damage to this character.',
-        'Deal DefenderRoll damage to this character.',
+        'Deal AttackerRoll damage to this.',
+        'Deal DefenderRoll damage to this.',
       ),
       [[17], [5]],
     );
@@ -210,7 +212,7 @@ describe('several rolls: "that" is the latest, and a stored value keeps an earli
 
   it('uses a stored name inside a formula, and stores a formula', async () => {
     const hp = await runRolls(
-      text('Roll a d6.', 'Store (that total * 2) as Doubled.', 'Roll a d6.', 'Deal (Doubled + that total) damage to this character.'),
+      text('Roll a d6.', 'Store (that value * 2) as Doubled.', 'Roll a d6.', 'Deal (Doubled + that value) damage to this.'),
       [[3], [4]],
     );
     expect(hp).toBe(100 - (6 + 4));
@@ -218,7 +220,7 @@ describe('several rolls: "that" is the latest, and a stored value keeps an earli
 
   it('stores the value as it was, even after later dice', async () => {
     const hp = await runRolls(
-      text('Roll 2d6.', 'Store that highest die as Best.', 'Roll 2d6.', 'Deal Best damage to this character.', 'Deal that total damage to this character.'),
+      text('Roll 2d6.', 'Store that highest die as Best.', 'Roll 2d6.', 'Deal Best damage to this.', 'Deal that value damage to this.'),
       [[1, 6], [2, 2]],
     );
     expect(hp).toBe(100 - 6 - 4);
@@ -227,15 +229,15 @@ describe('several rolls: "that" is the latest, and a stored value keeps an earli
   it('reports a name that was never stored, used twice, or reserved', () => {
     const errors = (...lines: string[]) =>
       compile(text(...lines)).diagnostics.filter((d) => d.severity === 'error').map((d) => d.message);
-    expect(errors('Deal Missing damage to this character.')[0]).toMatch(/"Missing" has not been stored.*Store that value as Missing/);
+    expect(errors('Deal Missing damage to this.')[0]).toMatch(/"Missing" has not been stored.*Store that value as Missing/);
     expect(errors('Roll a d6.', 'Store that value as X.', 'Store that value as X.')[0]).toMatch(/already stored/);
     expect(errors('Roll a d6.', 'Store that value as count.')[0]).toMatch(/word the language already uses/);
-    expect(errors('Roll a d6.', 'Store that value as total.')[0]).toMatch(/word the language already uses/);
-    expect(errors('Deal (Later * 2) damage to this character.', 'Roll a d6.', 'Store that value as Later.')[0]).toMatch(/"Later" has not been stored/);
+    expect(errors('Roll a d6.', 'Store that value as value.')[0]).toMatch(/word the language already uses/);
+    expect(errors('Deal (Later * 2) damage to this.', 'Roll a d6.', 'Store that value as Later.')[0]).toMatch(/"Later" has not been stored/);
   });
 
   it('round-trips the store sentence and a stored name, as the bare name', () => {
-    const source = text('Roll a d6.', 'Store that value as AttackerRoll.', 'Deal AttackerRoll damage to this character.');
+    const source = text('Roll a d6.', 'Store that value as AttackerRoll.', 'Deal AttackerRoll damage to this.');
     const ir = lowerDocument(parseDocument(source).doc);
     expect(ir.abilities[0]!.steps[1]!.effects[0]).toEqual({
       kind: 'store',
@@ -244,8 +246,8 @@ describe('several rolls: "that" is the latest, and a stored value keeps an earli
     });
     expect(ir.abilities[0]!.steps[2]!.effects[0]).toMatchObject({ amount: { kind: 'variable', name: 'AttackerRoll' } });
     const rendered = renderDocument(ir).text;
-    expect(rendered).toContain('Store that total as AttackerRoll.');
-    expect(rendered).toContain('Deal AttackerRoll damage to this character.');
+    expect(rendered).toContain('Store that value as AttackerRoll.');
+    expect(rendered).toContain('Deal AttackerRoll damage to this.');
     expect(lowerDocument(parseDocument(rendered).doc).abilities[0]!.steps).toEqual(ir.abilities[0]!.steps);
   });
 });
@@ -301,20 +303,20 @@ describe('If <value> is <test>', () => {
   const hpAfter = (roll: number, ...lines: string[]) => runRolls(text('Roll a d20.', ...lines), [[roll]]);
 
   it('"N or more" runs only when the roll is at least that', async () => {
-    const line = 'If that total is 15 or more, Deal 50 damage to this character.';
+    const line = 'If that value >= 15, Deal 50 damage to this.';
     expect(await hpAfter(15, line)).toBe(50);
     expect(await hpAfter(20, line)).toBe(50);
     expect(await hpAfter(14, line)).toBe(100);
   });
 
   it('"N or less", "N to M" and a bare "N"', async () => {
-    expect(await hpAfter(3, 'If that total is 3 or less, Deal 7 damage to this character.')).toBe(93);
-    expect(await hpAfter(4, 'If that total is 3 or less, Deal 7 damage to this character.')).toBe(100);
-    expect(await hpAfter(5, 'If that total is 5 to 8, Deal 7 damage to this character.')).toBe(93);
-    expect(await hpAfter(8, 'If that total is 5 to 8, Deal 7 damage to this character.')).toBe(93);
-    expect(await hpAfter(9, 'If that total is 5 to 8, Deal 7 damage to this character.')).toBe(100);
-    expect(await hpAfter(13, 'If that total is 13, Deal 7 damage to this character.')).toBe(93);
-    expect(await hpAfter(12, 'If that total is 13, Deal 7 damage to this character.')).toBe(100);
+    expect(await hpAfter(3, 'If that value <= 3, Deal 7 damage to this.')).toBe(93);
+    expect(await hpAfter(4, 'If that value <= 3, Deal 7 damage to this.')).toBe(100);
+    expect(await hpAfter(5, 'If that value >= 5 and that value <= 8, Deal 7 damage to this.')).toBe(93);
+    expect(await hpAfter(8, 'If that value >= 5 and that value <= 8, Deal 7 damage to this.')).toBe(93);
+    expect(await hpAfter(9, 'If that value >= 5 and that value <= 8, Deal 7 damage to this.')).toBe(100);
+    expect(await hpAfter(13, 'If that value = 13, Deal 7 damage to this.')).toBe(93);
+    expect(await hpAfter(12, 'If that value = 13, Deal 7 damage to this.')).toBe(100);
   });
 
   it('compares two values: higher than, lower than, the same as', async () => {
@@ -325,9 +327,9 @@ describe('If <value> is <test>', () => {
           'Store that value as AttackerRoll.',
           'Roll a d20.',
           'Store that value as DefenderRoll.',
-          'If AttackerRoll is higher than DefenderRoll, Deal 10 damage to this character.',
-          'If AttackerRoll is lower than DefenderRoll, Deal 20 damage to this character.',
-          'If AttackerRoll is the same as DefenderRoll, Deal 1 damage to this character.',
+          'If AttackerRoll > DefenderRoll, Deal 10 damage to this.',
+          'If AttackerRoll < DefenderRoll, Deal 20 damage to this.',
+          'If AttackerRoll = DefenderRoll, Deal 1 damage to this.',
         ),
         [[attacker], [defender]],
       );
@@ -337,45 +339,46 @@ describe('If <value> is <test>', () => {
   });
 
   it('tests a formula, and compares against a formula', async () => {
-    expect(await hpAfter(8, 'If (that total * 2) is 16 or more, Deal 5 damage to this character.')).toBe(95);
-    expect(await hpAfter(7, 'If (that total * 2) is 16 or more, Deal 5 damage to this character.')).toBe(100);
-    expect(await hpAfter(8, 'If that total is higher than (4 + 3), Deal 5 damage to this character.')).toBe(95);
+    expect(await hpAfter(8, 'If (that value * 2) >= 16, Deal 5 damage to this.')).toBe(95);
+    expect(await hpAfter(7, 'If (that value * 2) >= 16, Deal 5 damage to this.')).toBe(100);
+    expect(await hpAfter(8, 'If that value > (4 + 3), Deal 5 damage to this.')).toBe(95);
   });
 
   it('works with You may, and as the condition of a Repeat', async () => {
     // Roll until the die is above 3: 2, 2, then a 6 stops it.
     const hp = await runRolls(
-      text('Roll a d6.', 'Repeat up to 10 times while that total is 3 or less: Roll a d6.', 'Deal that total damage to this character.'),
+      text('Roll a d6.', 'Repeat up to 10 times while that value <= 3: Roll a d6.', 'Deal that value damage to this.'),
       [[2], [2], [6]],
     );
     expect(hp).toBe(94);
   });
 
   it('works inside a table line', async () => {
-    const lines = ['Roll a d20.', '  1 to 10: If that total is 5 or more, Deal 9 damage to this character.', '  11 or more: Deal 1 damage to this character.'];
+    const lines = ['Roll a d20.', '  1 to 10: If that value >= 5, Deal 9 damage to this.', '  11 or more: Deal 1 damage to this.'];
     expect(await runRolls(text(...lines), [[7]])).toBe(91);
     expect(await runRolls(text(...lines), [[3]])).toBe(100);
     expect(await runRolls(text(...lines), [[15]])).toBe(99);
   });
 
   it('keeps "If the board is full" on the old message that lists the other shapes', () => {
-    const message = compile(text('If the board is full, Deal 1 damage to this character.')).diagnostics[0]?.message ?? '';
-    expect(message).toMatch(/"there are …".*"every …".*that total is 10 or more/);
+    const message = compile(text('If the board is full, Deal 1 damage to this.')).diagnostics[0]?.message ?? '';
+    expect(message).toMatch(/"there are …".*"every …".*that value >= 10/);
   });
 
   it('explains a test it cannot read', () => {
     const message = (line: string) => compile(text('Roll a d6.', line)).diagnostics[0]?.message ?? '';
-    expect(message('If that total is big, Deal 1 damage to this character.')).toMatch(/expected a number or a comparison after "is"/);
-    expect(message('If that total is 9 to 3, Deal 1 damage to this character.')).toMatch(/counts down/);
-    expect(message('If that total is 3 or fewer, Deal 1 damage to this character.')).toMatch(/expected "more" or "less"/);
-    expect(message('If that total is higher than, Deal 1 damage to this character.')).toMatch(/expected a number/);
+    expect(message('If that value is big, Deal 1 damage to this.')).toMatch(/or a comparison like "that value >= 10"/);
+    expect(message('If that value > , Deal 1 damage to this.').length).toBeGreaterThan(0);
+    expect(message('If that value >= 3 and Deal 1 damage to this.')).toMatch(/comparison/);
+    // The word forms are gone.
+    expect(message('If that value is higher than 3, Deal 1 damage to this.')).toMatch(/or a comparison like "that value >= 10"/);
   });
 
   it('checks a stored name used in a condition', () => {
-    const errors = compile(text('If Missing is 3 or more, Deal 1 damage to this character.')).diagnostics.map((d) => d.message);
+    const errors = compile(text('If Missing >= 3, Deal 1 damage to this.')).diagnostics.map((d) => d.message);
     expect(errors[0]).toMatch(/"Missing" has not been stored/);
     expect(
-      compile(text('Roll a d6.', 'Store that value as X.', 'If Y is higher than X, Deal 1 damage to this character.')).diagnostics[0]?.message,
+      compile(text('Roll a d6.', 'Store that value as X.', 'If Y > X, Deal 1 damage to this.')).diagnostics[0]?.message,
     ).toMatch(/"Y" has not been stored/);
   });
 
@@ -383,29 +386,29 @@ describe('If <value> is <test>', () => {
     const source = text(
       'Roll a d20.',
       'Store that value as A.',
-      'If that total is 15 or more, Deal 1 damage to this character.',
-      'If that total is 3 or less, Deal 1 damage to this character.',
-      'If that total is 5 to 8, Deal 1 damage to this character.',
-      'If that total is 13, Deal 1 damage to this character.',
-      'If A is higher than that total, Deal 1 damage to this character.',
-      'If A is lower than 7, Deal 1 damage to this character.',
-      'If A is the same as that total, Deal 1 damage to this character.',
-      'If (that total * 2) is 16 or more, Deal 1 damage to this character.',
+      'If that value >= 15, Deal 1 damage to this.',
+      'If that value <= 3, Deal 1 damage to this.',
+      'If that value >= 5 and that value <= 8, Deal 1 damage to this.',
+      'If that value = 13, Deal 1 damage to this.',
+      'If A > that value, Deal 1 damage to this.',
+      'If A < 7, Deal 1 damage to this.',
+      'If A = that value, Deal 1 damage to this.',
+      'If (that value * 2) >= 16, Deal 1 damage to this.',
     );
     const ir = lowerDocument(parseDocument(source).doc);
     const { text: rendered, gaps } = renderDocument(ir);
     expect(gaps).toEqual([]);
     // The renderer's own style: the effect after a guard is lowercased, a stored
-    // value reads "that total", and a formula is written with its path.
+    // value reads "that value", and a formula is written with its path.
     for (const line of [
-      'If that total is 15 or more, deal 1 damage to this character.',
-      'If that total is 3 or less, deal 1 damage to this character.',
-      'If that total is 5 to 8, deal 1 damage to this character.',
-      'If that total is 13, deal 1 damage to this character.',
-      'If A is higher than that total, deal 1 damage to this character.',
-      'If A is lower than 7, deal 1 damage to this character.',
-      'If A is the same as that total, deal 1 damage to this character.',
-      'If (roll.total * 2) is 16 or more, deal 1 damage to this character.',
+      'If that value >= 15, deal 1 damage to this.',
+      'If that value <= 3, deal 1 damage to this.',
+      'If that value >= 5 and that value <= 8, deal 1 damage to this.',
+      'If that value = 13, deal 1 damage to this.',
+      'If A > that value, deal 1 damage to this.',
+      'If A < 7, deal 1 damage to this.',
+      'If A = that value, deal 1 damage to this.',
+      'If (roll.total * 2) >= 16, deal 1 damage to this.',
     ]) {
       expect(rendered).toContain(line);
     }
@@ -415,7 +418,7 @@ describe('If <value> is <test>', () => {
   });
 
   it('lowers to plain comparisons, so JSON documents use the same predicate', () => {
-    const ir = lowerDocument(parseDocument(text('Roll a d20.', 'If that total is 5 to 8, Deal 1 damage to this character.')).doc);
+    const ir = lowerDocument(parseDocument(text('Roll a d20.', 'If that value >= 5 and that value <= 8, Deal 1 damage to this.')).doc);
     expect(ir.abilities[0]!.steps[1]!.when).toEqual({
       kind: 'and',
       clauses: [

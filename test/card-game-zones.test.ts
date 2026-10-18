@@ -109,7 +109,7 @@ describe('card game — the zones exist', () => {
 describe('card game — casting is a move', () => {
   it('sends a played spell hand → stack → active → garbage', async () => {
     const { cards } = playableCards(
-      ['Card Test Bolt', 'Cost 1', 'Spell', 'Deal 1 damage to target enemy character.'].join('\n'),
+      ['Card Test Bolt', '{ "cost": 1, "type": "spell" }', 'Deal 1 damage to target enemy character.'].join('\n'),
     );
     const bolt = cards[0]!;
     const spell = deckOf(bolt).map((c) => c);

@@ -126,7 +126,6 @@ console.log('\n=== A runaway bomb: cycles are detected, not hung ===');
 const runaway = buff({
   name: 'Runaway',
   weight: 1,
-  stacks: true,
   abilities: [
     auto({
       name: 'Clone',

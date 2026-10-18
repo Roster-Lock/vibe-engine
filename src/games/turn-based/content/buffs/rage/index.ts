@@ -15,7 +15,6 @@ export const rage = buff({
   name: 'Rage',
   icon,
   weight: 2,
-  stacks: true,
   variables: () => ({ stacks: 1 }),
   abilities: [
     passiveActionModifier({

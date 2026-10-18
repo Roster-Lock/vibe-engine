@@ -38,7 +38,6 @@ function modifierBuff(id: string, match: ActionMatchIR, rewrite: ActionRewriteIR
     id,
     name: id,
     weight: 1,
-    stacks: false,
     triggers: [],
     modifiers: [{ id: `${id}-mod`, name: id, match, rewrite }],
   };

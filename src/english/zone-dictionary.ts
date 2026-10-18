@@ -2,7 +2,7 @@
  * The **zone dictionary** — where a zone-movement trigger's zone names
  * resolve (`when this enters play from active then …`).
  *
- * Zones are game data: the engine ships exactly two (`play`, `graveyard`,
+ * Zones are game data: the engine ships exactly two (`play`, `garbage`,
  * see `src/engine/zone.ts`) and a game declares the rest — a deck, a hand,
  * a stack, a resolving `active` slot, an exile. So the language cannot
  * hard-code the list any more than it can hard-code buffs; the host supplies
@@ -47,7 +47,7 @@ export class ZoneDictionary {
 
   /**
    * Resolves a typed name to the zone's canonical spelling — so a reference
-   * is shown as the game declared it (`Graveyard`, not `graveyard`)
+   * is shown as the game declared it (`Garbage`, not `garbage`)
    * everywhere, including in the IR.
    */
   resolve(name: string): string | undefined {

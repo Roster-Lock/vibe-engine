@@ -75,7 +75,7 @@ describe('lowering to IR', () => {
   });
 
   it('lowers an ownership clause to a relation filter, not a comparison', () => {
-    const result = compileDocument('Destroy all characters owned by the opponent.');
+    const result = compileDocument('Destroy all characters owned by opponents.');
     const effect = result.ir.abilities[0]!.steps[0]!.effects[0]!;
     expect(effect).toEqual({
       kind: 'destroy',
@@ -88,8 +88,8 @@ describe('lowering to IR', () => {
       Buff Poison
       Buff Thorns
       Ability Reap
-      Add Poison to this character.
-      Add Thorns to this character.
+      Add Poison to this.
+      Add Thorns to this.
       Destroy all enemy characters with (Poison or Thorns) and hp <= 40.
     `);
     const destroy = result.ir.abilities[0]!.steps[2]!.effects[0]!;
@@ -121,8 +121,8 @@ describe('lowering to IR', () => {
   it('a buff lowers its sentences to triggers grouped by event', () => {
     const result = compileDocument(`
       Buff Regeneration
-      When the turn starts, heal this character for 5.
-      When the turn ends, heal this character for 2.
+      When a turn starts then heal this for 5.
+      When a turn ends then heal this for 2.
 
       Ability Bless
       Add Regeneration to target ally character.
@@ -139,7 +139,7 @@ describe('lowering to IR', () => {
 
 describe('IR as the share format', () => {
   const source = `
-    Buff Frailty (stacks)
+    Buff Frailty
 
     Ability Soul Rot
     Deal 12 damage to target enemy character.
@@ -172,7 +172,7 @@ describe('IR as the share format', () => {
     // The "other player" end: nothing but the JSON and the buff resolver.
     const received = shared(compiled.ir);
     const rebound = bindDocument(received, {
-      resolveBuff: (name) => received.buffs.find((b) => b.name === name) && { name, weight: 1, stacks: true },
+      resolveBuff: (name) => received.buffs.find((b) => b.name === name) && { name, weight: 1 },
     });
 
     const run = async (ability: Parameters<typeof buildArena>[0]) => {

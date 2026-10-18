@@ -35,7 +35,7 @@ import { triggerSummary } from './describe.js';
 import { BuffDictionary, slug, type DictionaryEntry } from './dictionary.js';
 import { emptyZoneDictionary, type ZoneDictionary } from './zone-dictionary.js';
 import { lowerDocument, lowerSteps } from './lower.js';
-import { MATH_ROOTS, validateRounds, type MathExpression } from '../ir/index.js';
+import { MATH_ROOTS, validateRounds, type ContestIR, type MathExpression } from '../ir/index.js';
 import { rollStatOf } from './rounds.js';
 import { parseDocument } from './parser.js';
 
@@ -44,11 +44,13 @@ export interface CompileOptions {
   readonly dictionary?: BuffDictionary;
   /**
    * The zone names a `when … enters/leaves <zone>` trigger may name. The
-   * engine's own `play`/`graveyard` are always known; a game adds its deck,
+   * engine's own `play`/`garbage` are always known; a game adds its deck,
    * hand, stack, resolving `active` slot, and so on.
    */
   readonly zones?: ZoneDictionary;
-  /** Contests a sentence may play by name (`Each player plays Rock Paper Scissors.`). */
+  /** The gauge ids the game declares, for `with hp < 10` and `incoming mana loss`. Defaults to `hp` and `mana`. */
+  readonly gauges?: readonly string[];
+  /** Contests a sentence may play by name (`All players play Rock Paper Scissors.`). */
   readonly contests?: readonly import("../ir/index.js").ContestIR[];
   /** Creature definitions a sentence may create by name (`Create a Giant Golem.`). */
   readonly creatures?: readonly string[];
@@ -83,11 +85,14 @@ export interface CompileResult {
    * while the game runs, not part of the zone's declaration.
    */
   readonly zones: ZoneBinding[];
+  /** One contest per valid `Contest` section — a function of a list of players to who won, who lost, or a tie. */
+  readonly contests: ContestIR[];
 }
 
 export function compileDocument(text: string, options: CompileOptions = {}): CompileResult {
   const parsed = parseDocument(text, {
     zones: options.zones ?? emptyZoneDictionary(),
+    ...(options.gauges ? { gauges: options.gauges } : {}),
     ...(options.contests ? { contests: options.contests } : {}),
     ...(options.creatures ? { creatures: options.creatures } : {}),
   });
@@ -135,7 +140,7 @@ export function compileDocument(text: string, options: CompileOptions = {}): Com
         end: section.nameSpan.end,
       });
     } else {
-      declared.push({ name: section.name, def: { name: section.name, weight: section.weight, ...(section.stacks ? { stacks: true } : {}) } });
+      declared.push({ name: section.name, def: { name: section.name, weight: section.weight } });
       buffSectionsList.push(section);
     }
   }
@@ -278,7 +283,7 @@ export function compileDocument(text: string, options: CompileOptions = {}): Com
       });
     }
   };
-  // A trigger that sets itself off again: "When this takes damage then deal damage to
+  // A trigger that sets itself off again: "When this is damaged then deal damage to
   // this character." The engine would stop it (gas), but it is almost never what was
   // meant, so say so while it is still being written. Conservative on purpose — it
   // only recognises a trigger on "this" whose effect lands on "this" (or on everyone,
@@ -298,7 +303,7 @@ export function compileDocument(text: string, options: CompileOptions = {}): Com
         severity: 'warning',
         message:
           `"${triggerSummary(trigger)}" sets itself off again every time it runs, so it never stops — the engine ` +
-          `will end it when it runs out of gas. Aim it at "the source character", or add a condition.`,
+          `will end it when it runs out of gas. Aim it at "the source", or add a condition.`,
         code: 'trigger-loop',
         start: trigger.span.start,
         end: trigger.span.end,
@@ -442,11 +447,13 @@ export function compileDocument(text: string, options: CompileOptions = {}): Com
       }
     };
     for (const sentence of sentences.flatMap(withNested)) {
-      // A condition may read a stored name too: `If AttackerRoll is higher than DefenderRoll, …`.
+      // A condition may read a stored name too: `If AttackerRoll > DefenderRoll, …`.
       for (const clause of [sentence.guard, sentence.repeat?.condition]) {
         if (clause?.kind !== 'value') continue;
-        check(clause.value, clause.span, new Set());
-        if (clause.test.kind === 'compare') check(clause.test.other, clause.span, new Set());
+        for (const comparison of clause.comparisons) {
+          check(comparison.value, comparison.span, new Set());
+          check(comparison.other, comparison.span, new Set());
+        }
       }
       if (sentence.kind === 'deal' || sentence.kind === 'heal') check(sentence.amount, sentence.amountSpan, new Set());
       if (sentence.kind === 'draw' || sentence.kind === 'scry') check(sentence.count, sentence.span, new Set());
@@ -471,12 +478,14 @@ export function compileDocument(text: string, options: CompileOptions = {}): Com
     const report = (message: string, at: { start: number; end: number }): void => {
       diagnostics.push({ severity: 'error', message, code: 'vote-tally', start: at.start, end: at.end });
     };
-    const optionsRead = (expression: MathExpression): string[] => {
+    /** Every tally an amount reads: an option's (`votes for Attack`), or a bare extreme (`the highest vote`). */
+    const optionsRead = (expression: MathExpression): (string | undefined)[] => {
       switch (expression.kind) {
         case 'path':
-          return expression.parts[0] === 'votes' && expression.parts.length === 2 && typeof expression.parts[1] === 'string'
-            ? [expression.parts[1]]
-            : [];
+          if (expression.parts[0] === 'votes' && expression.parts.length === 2 && typeof expression.parts[1] === 'string') {
+            return [expression.parts[1]];
+          }
+          return expression.parts[0] === 'vote' && expression.parts.length === 2 ? [undefined] : [];
         case 'unary':
           return optionsRead(expression.expression);
         case 'binary':
@@ -493,8 +502,7 @@ export function compileDocument(text: string, options: CompileOptions = {}): Com
       const out: MathExpression[] = [];
       for (const clause of [sentence.guard, sentence.repeat?.condition]) {
         if (clause?.kind !== 'value') continue;
-        out.push(clause.value);
-        if (clause.test.kind === 'compare') out.push(clause.test.other);
+        for (const comparison of clause.comparisons) out.push(comparison.value, comparison.other);
       }
       if (sentence.kind === 'deal' || sentence.kind === 'heal') out.push(sentence.amount);
       if (sentence.kind === 'store') out.push(sentence.value);
@@ -505,15 +513,16 @@ export function compileDocument(text: string, options: CompileOptions = {}): Com
       // A guard is read before the sentence it gates runs, so it is checked first.
       for (const expression of expressionsOf(sentence)) {
         for (const option of optionsRead(expression)) {
+          const what = option === undefined ? 'the votes' : `"votes for ${option}"`;
           if (!latest) {
-            report(`"votes for ${option}" is read before any vote — hold one first: "Starting with you, each player votes for ${option} or …"`, sentence.span);
-          } else if (!latest.options.some((candidate) => candidate.toLowerCase() === option.toLowerCase())) {
+            report(`${what} are read before any vote — hold one first: "All players choose ${option ?? 'Attack'} or …"`, sentence.span);
+          } else if (option !== undefined && !latest.options.some((candidate) => candidate.toLowerCase() === option.toLowerCase())) {
             report(
               `nobody can vote for "${option}" — the options are ${latest.options.map((o) => `"${o}"`).join(' and ')}`,
               sentence.span,
             );
           } else if (latest.sealed) {
-            report(`"votes for ${option}" is read before the votes are revealed — add "When they are ready, reveal." first`, sentence.span);
+            report(`${what} are read before the votes are revealed — add "When they are ready, reveal." first`, sentence.span);
           }
         }
       }
@@ -585,6 +594,7 @@ export function compileDocument(text: string, options: CompileOptions = {}): Com
     abilities: bound.abilities,
     triggers: bound.triggers,
     zones: bound.zones,
+    contests: doc.contests.flatMap((section) => (section.contest ? [section.contest] : [])),
   };
 }
 
@@ -666,6 +676,7 @@ function canonicalizeBuffNames(doc: Doc, dictionary: BuffDictionary): Doc {
     })),
     imports: doc.imports,
     triggers: doc.triggers,
+    contests: doc.contests,
   };
 }
 

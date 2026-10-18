@@ -85,7 +85,7 @@ export type ValueIR =
   /**
    * **What the most recent `roll` in this resolution came to** — the `total` of
    * its dice, or the `highest` / `lowest` single die. For one die all three are
-   * the die. Reads 0 when nothing has been rolled yet. English: `that total`.
+   * the die. Reads 0 when nothing has been rolled yet. English: `that value`.
    *
    * It is always the *latest* roll; to keep an earlier one, `store` it under a
    * name and read the name (`variable`).
@@ -109,6 +109,13 @@ export type ValueIR =
    * forfeited cast no vote. Reads 0 if nothing has been voted on.
    */
   | { readonly kind: 'votes'; readonly option: string }
+  /**
+   * **The highest / lowest vote** any option got in the most recent vote — the
+   * count of the most (or least) chosen option, options nobody chose counting 0.
+   * English: `the highest vote`, `the lowest vote`. `votes for Attack = the
+   * highest vote` is true for an option that won *or tied*; `>` is a strict win.
+   */
+  | { readonly kind: 'voteStat'; readonly stat: 'highest' | 'lowest' }
   /** The formula language (Σ, arithmetic, paths) for anything else. */
   | { readonly kind: 'expr'; readonly expression: MathExpression };
 
@@ -341,7 +348,7 @@ export type EffectIR =
   | { readonly kind: 'store'; readonly name: string; readonly value: ValueIR }
   /**
    * **Give a zone's cards an ability** — "Cards in your boxed zone have Open
-   * Present for each opponent." The ability is a sibling in the same document,
+   * Present for all opponents." The ability is a sibling in the same document,
    * named by its `id`; the zone is an abstract role mapped through
    * `BindOptions.aliases`. It adds to what the zone already gives and replaces who
    * may use *that* ability if it was already given. Standing state set while the
@@ -446,7 +453,7 @@ export type EffectIR =
    */
   | { readonly kind: 'scry'; readonly count: ValueIR; readonly players: PlayerListIR; readonly surveil?: true }
   /**
-   * **Play a contest** — `Each player plays Rock Paper Scissors.` Every player commits one of
+   * **Play a contest** — `All players play Rock Paper Scissors.` Every player commits one of
    * the contest's options face down, then they are revealed together. Players whose option beats
    * another's and is beaten by none are the **winners**; whose option is beaten and beats none,
    * the **losers**. The sentences that follow can act on `the winners` and `the losers`.
@@ -462,7 +469,7 @@ export type EffectIR =
   | { readonly kind: 'reveal'; readonly round: string }
   /**
    * Moves what each chooser picked in `round` into **their own** `to` zone —
-   * "each player puts the card they chose into their garbage". The zone is an
+   * "each player moves the card they chose to their garbage". The zone is an
    * abstract role, mapped through `BindOptions.aliases` like `discover`'s.
    */
   | { readonly kind: 'moveChosen'; readonly round: string; readonly to: string }
@@ -497,16 +504,16 @@ export type PlayerListIR = ChoosersIR | 'winners' | 'losers';
 
 /** One rule of a contest, read in order; the first that fits decides the result. */
 export type ContestRuleIR =
-  /** `If both players choose the same option, it is a tie.` — nobody wins or loses. */
+  /** `If all players committed the same option, it is a tie.` — nobody wins or loses. */
   | { readonly kind: 'tie' }
-  /** `If player 1 chooses Rock and player 2 chooses Scissors, player 1 wins and player 2 loses.` */
+  /** `If player 1 committed Rock and player 2 committed Scissors, player 1 win and player 2 lose.` */
   | {
       readonly kind: 'when';
       readonly picks: readonly { readonly player: number; readonly option: string }[];
       readonly winners: readonly number[];
       readonly losers: readonly number[];
     }
-  /** `Otherwise player 2 wins and player 1 loses.` */
+  /** `Otherwise player 2 win and player 1 lose.` */
   | { readonly kind: 'otherwise'; readonly winners: readonly number[]; readonly losers: readonly number[] };
 
 /**
@@ -568,7 +575,7 @@ export interface CardSelectorIR {
 /**
  * A zone and whose it is: `you` (the controller's), `owner` (each moved card's own
  * owner — only for a destination), `opponent` (an opponent: the only one, or the one
- * the controller picks), `opponents` (each opponent's), `each` (every player's), or
+ * the controller picks), `opponents` (all opponents'), `each` (every player's), or
  * `shared` (a zone nobody owns, such as `play` or the stack).
  */
 export interface ZoneRefIR {
@@ -838,13 +845,13 @@ export interface TriggerIR {
    * For a `gauge:changed` trigger: which gauge, and which direction.
    *
    * The engine has no "was damaged" event — damage is a gauge going down
-   * (see events.ts) — so "takes damage" is `gauge:changed` plus these two.
+   * (see events.ts) — so "is damaged" is `gauge:changed` plus these two.
    * They match the **event**, not an entity, which is why they are not
    * part of `filter`.
    *
    * Same selector as `ActionMatchIR.gauge`: a named id, or
    * `{ kind: 'life' }` for the gauge the *triggering entity* declares as
-   * its life — resolved per event, so "takes damage" fires on hp for a
+   * its life — resolved per event, so "is damaged" fires on hp for a
    * fighter and `loyalty` for a planeswalker. One meaning of "damage"
    * across triggers, effects and modifiers alike.
    */
@@ -890,6 +897,8 @@ export interface DocumentIR {
   readonly triggers: readonly TriggerIR[];
   /** Statements about one of the game's zones; absent in a document with none. */
   readonly zones?: readonly ZoneSectionIR[];
+  /** The `Contest` sections the document defines, each a function of a list of players; absent in a document with none. */
+  readonly contests?: readonly ContestIR[];
 }
 
 /**
@@ -901,30 +910,9 @@ export interface ZoneSectionIR {
   /** The zone, as an abstract role mapped through `BindOptions.aliases`. */
   readonly zone: string;
   readonly steps: readonly StepIR[];
-  /** Standing rules of the zone: `At the start of your turn, …` runs `steps` at that event. */
+  /** Standing rules of the zone: `When your turn starts then …` runs `steps` at that event. */
   readonly triggers?: readonly { readonly event: string; readonly yours: boolean; readonly steps: readonly StepIR[] }[];
 }
-
-/**
- * How long a buff lasts.
- *
- * A duration is **not** a field the engine reads — the engine has no clock
- * and no notion of expiry. It is lowered into an ordinary triggered
- * ability on the buff that removes the buff when its time is up, which is
- * why "until end of turn" needs no engine change at all: a buff already
- * *is* a bundle of abilities, and one of them can take the buff off.
- *
- * Each **instance** expires on its own, so every stack of a duration buff
- * goes at the same turn's end rather than one stack per turn.
- */
-export type DurationIR =
-  /** Gone when the current turn ends. */
-  | { readonly kind: 'endOfTurn' }
-  /**
-   * Gone after this many turn-ends. `{ count: 1 }` is `endOfTurn`; the
-   * general form is for "for 3 turns".
-   */
-  | { readonly kind: 'turns'; readonly count: number };
 
 /* ----------------------------- modifiers ------------------------------ */
 
@@ -1044,9 +1032,12 @@ export interface BuffIR {
   readonly id: string;
   readonly name: string;
   readonly weight: number;
-  readonly stacks: boolean;
-  /** Omitted means permanent — it lasts until something removes it. */
-  readonly duration?: DurationIR;
+  /**
+   * `fading <n>`: each instance starts with n counters, a turn end removes one,
+   * and an instance that cannot remove one is destroyed. Omitted means
+   * permanent — it lasts until something removes it.
+   */
+  readonly fading?: number;
   readonly triggers: readonly TriggerIR[];
   /** Action modifiers the buff grants while attached. */
   readonly modifiers?: readonly ModifierIR[];

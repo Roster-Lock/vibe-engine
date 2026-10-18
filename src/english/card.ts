@@ -7,45 +7,45 @@
  *
  * ```
  * Card Fireball
- * Cost 4
- * Spell
+ * { "cost": 4, "type": "spell" }
  * Deal 6 damage to target enemy character.
  * ```
  *
  * ```
  * Card Shieldbearer
- * Cost 2
- * Creature 1/4
+ * { "cost": 2, "type": "creature", "creatureConfig": { "power": 1, "health": 4 } }
  * Taunt.
  * ```
  *
  * ```
  * Card Elven Archer
- * Cost 1
- * Creature 1/1
+ * { "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }
  * When this enters play then Deal 1 damage to target enemy character.
  * ```
  *
  * ```
- * Card Cursed Idol
- * Cost 2
- * Creature 2/1
- * When this dies then Deal 2 damage to all enemy characters.
+ * Creature Giant Golem
+ * { "type": "creature", "creatureConfig": { "power": 6, "health": 6 } }
+ * Taunt.
  * ```
  *
  * ## The grammar
  *
- * A card is a heading line (`Card <name>`) followed by **header lines** —
- * `Cost <n>`, exactly one of `Creature <power>/<health>` or `Spell` — then
- * its **effect lines**:
+ * A card is a heading line (`Card <name>`) followed by a **header** — a JSON
+ * object holding the card's data: `"cost"`, `"type"` (`"spell"` or `"creature"`),
+ * and for settings that belong to a kind of permanent, a key of their own
+ * (`"creatureConfig": { "power", "health" }`) — then its **effect lines**, which
+ * are raw text in the language. A `Creature <name>` definition (a token that
+ * effects make) takes the same header without a cost. The header may be one line
+ * or spread over several.
  *
  * - a `Spell`'s effect sentences are written bare, exactly like an
  *   ability's body (`Deal …`, `Heal …`, `Destroy …`, `Add …`);
  * - a creature's **entering-play** effect is written
  *   `When this enters play then <effect>.` — the engine has no summon
  *   event, so the card layer fires it the moment the creature lands;
- * - `When this dies then <effect>.` is an ordinary trigger, like any other
- *   the creature carries on the board (`When this takes damage then …`);
+ * - `When this is destroyed then <effect>.` is an ordinary trigger, like any other
+ *   the creature carries on the board (`When this is damaged then …`);
  * - `Taunt.` / `Charge.` are keywords.
  *
  * The event words are the explicit ones, with no card-game shorthand: the
@@ -68,7 +68,6 @@ import type { AnyTriggeredAbility, BuffDef, ManualAbility, TargetPattern, ZoneDe
 import type { ContestIR, DocumentIR, ZoneBinding } from '../ir/index.js';
 import type { CharsPhrase, Diagnostic, Doc, Sentence, Span } from './ast.js';
 import { compileDocument, type CompileOptions } from './compile.js';
-import { parseContest } from './contest.js';
 import { completeAt, wordDoc, type Suggestion } from './complete.js';
 import { BuffDictionary, emptyDictionary, slug, type DictionaryEntry } from './dictionary.js';
 import {
@@ -174,7 +173,7 @@ export interface CompiledCard {
    * those as untargeted.
    */
   readonly targeting?: TargetPattern;
-  /** Triggers the creature carries in play (`When this dies then …`, …). */
+  /** Triggers the creature carries in play (`When this is destroyed then …`, …). */
   readonly triggers: readonly AnyTriggeredAbility[];
   /** Printed rules text — the card's effect lines, for the card face. */
   readonly rulesText: string;
@@ -226,6 +225,8 @@ interface SourceLine {
   readonly contentEnd: number;
   /** 1-based line number. */
   readonly number: number;
+  /** True for a line the splitter made from the JSON header — the only place `Cost`/`Spell`/`Creature p/h` are read. */
+  readonly generated?: true;
 }
 
 function sourceLines(text: string): SourceLine[] {
@@ -263,12 +264,14 @@ function isIgnorable(line: SourceLine): boolean {
 
 interface CardSection {
   readonly kind: 'card';
-  /** A creature definition (`Creature Giant Golem 6/6`), not a card: it has no cost and is never in a deck. */
+  /** A creature definition (`Creature Giant Golem` + a header), not a card: it has no cost and is never in a deck. */
   readonly token?: true;
   readonly heading: SourceLine;
   readonly name: string;
   readonly nameSpan: Span;
   readonly lines: SourceLine[];
+  /** Where the JSON header object is, once the section has read it. */
+  headerSpan?: Span;
 }
 
 /** `Zone Suspend (per-player, public)` — a zone the document declares, with the rules it keeps. */
@@ -281,7 +284,7 @@ interface ZoneSectionSrc {
   readonly lines: SourceLine[];
 }
 
-/** `Contest Rock Paper Scissors` followed by `Rock beats Scissors.` lines. */
+/** `Contest Rock Paper Scissors` and its body, read by the ability parser like any other section. */
 interface ContestSectionSrc {
   readonly kind: 'contest';
   readonly heading: SourceLine;
@@ -325,37 +328,184 @@ function headingName(line: SourceLine, keyword: string, stopAtParens: boolean): 
   return { name, span: { start: at, end: at + name.length } };
 }
 
+/* ------------------------------ the JSON header --------------------------- */
+
+const HEADER_SHAPE_CARD = '{ "cost": 3, "type": "spell" } or { "cost": 2, "type": "creature", "creatureConfig": { "power": 2, "health": 3 } }';
+const HEADER_SHAPE_TOKEN = '{ "type": "creature", "creatureConfig": { "power": 6, "health": 6 } }';
+
+/**
+ * Where a header object ends: the line holding its closing brace, counting braces outside strings.
+ * An object that never closes runs to the end of the document (and then fails to parse, with a message).
+ */
+function headerEnd(lines: readonly SourceLine[], from: number): number {
+  let depth = 0;
+  let inString = false;
+  for (let index = from; index < lines.length; index += 1) {
+    const line = lines[index]!;
+    const content = lineText(line);
+    for (let i = 0; i < content.length; i += 1) {
+      const ch = content[i]!;
+      if (inString) {
+        if (ch === '\\') i += 1;
+        else if (ch === '"') inString = false;
+      } else if (ch === '"') inString = true;
+      else if (ch === '{') depth += 1;
+      else if (ch === '}') {
+        depth -= 1;
+        if (depth === 0) return index;
+      }
+    }
+    inString = false;
+  }
+  return lines.length - 1;
+}
+
+/**
+ * Reads a card's JSON header — `{ "cost": 3, "type": "creature", "creatureConfig": { "power": 2, "health": 3 } }` —
+ * and returns the `Cost` / `Creature p/h` / `Spell` lines the rest of the card layer reads, mapped back onto the
+ * header's own span. Problems are reported on the key that caused them.
+ */
+function headerLines(
+  raw: string,
+  base: number,
+  token: boolean,
+  first: SourceLine,
+  last: SourceLine,
+  push: (diagnostic: Diagnostic) => void,
+): SourceLine[] {
+  const whole: Span = { start: base, end: base + raw.length };
+  const shape = token ? HEADER_SHAPE_TOKEN : HEADER_SHAPE_CARD;
+  const fail = (message: string, code: string, at: Span = whole): void =>
+    push({ severity: 'error', message, code, start: at.start, end: Math.max(at.end, at.start + 1) });
+  /** The span of `"key"` in the header (after `from`), or the whole header. */
+  const keySpan = (key: string, from = 0): Span => {
+    const at = raw.indexOf(`"${key}"`, from);
+    return at === -1 ? whole : { start: base + at, end: base + at + key.length + 2 };
+  };
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch (error) {
+    fail(`the header is not valid JSON (${(error as Error).message}) — write ${shape}`, 'card-header-json');
+    return [];
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail(`the header is an object — write ${shape}`, 'card-header-json');
+    return [];
+  }
+  const object = value as Record<string, unknown>;
+  let ok = true;
+  const known = token ? ['type', 'creatureConfig'] : ['cost', 'type', 'creatureConfig'];
+  for (const key of Object.keys(object)) {
+    if (!known.includes(key)) {
+      fail(`"${key}" is not a header field — the fields are ${known.map((k) => `"${k}"`).join(', ')}`, 'card-header-field', keySpan(key));
+      ok = false;
+    }
+  }
+  const whole0 = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0;
+  let cost = 0;
+  if (!token) {
+    if (!whole0(object['cost'])) {
+      fail('"cost" is the mana the card costs — a whole number, e.g. "cost": 3', 'card-cost-missing', 'cost' in object ? keySpan('cost') : whole);
+      ok = false;
+    } else cost = object['cost'];
+  }
+  const type = token ? (object['type'] ?? 'creature') : object['type'];
+  if (type !== 'spell' && type !== 'creature') {
+    fail('"type" is "spell" or "creature", e.g. "type": "spell"', 'card-kind-missing', 'type' in object ? keySpan('type') : whole);
+    ok = false;
+  }
+  if (token && type === 'spell') {
+    fail('a creature definition is a creature — "type": "creature"', 'card-kind-missing', keySpan('type'));
+    ok = false;
+  }
+  let power = 0;
+  let health = 0;
+  if (type === 'creature') {
+    const config = object['creatureConfig'];
+    if (typeof config !== 'object' || config === null || Array.isArray(config)) {
+      fail('a creature needs "creatureConfig": { "power": 2, "health": 3 }', 'card-creature-config', 'creatureConfig' in object ? keySpan('creatureConfig') : whole);
+      ok = false;
+    } else {
+      const fields = config as Record<string, unknown>;
+      const at = raw.indexOf('"creatureConfig"');
+      for (const key of Object.keys(fields)) {
+        if (key !== 'power' && key !== 'health') {
+          fail(`"${key}" is not a creature field — "creatureConfig" holds "power" and "health"`, 'card-header-field', keySpan(key, at));
+          ok = false;
+        }
+      }
+      for (const key of ['power', 'health'] as const) {
+        if (!whole0(fields[key])) {
+          fail(`"${key}" is a whole number, e.g. "${key}": 2`, 'card-creature-config', key in fields ? keySpan(key, at) : keySpan('creatureConfig'));
+          ok = false;
+        }
+      }
+      if (whole0(fields['power'])) power = fields['power'];
+      if (whole0(fields['health'])) health = fields['health'];
+    }
+  } else if (type === 'spell' && 'creatureConfig' in object) {
+    fail('a spell has no "creatureConfig" — that is for creatures', 'card-creature-config', keySpan('creatureConfig'));
+    ok = false;
+  }
+  if (!ok) return [];
+  const generated = (text: string): SourceLine => ({
+    text,
+    start: first.start,
+    contentStart: first.contentStart,
+    contentEnd: last.contentEnd,
+    number: first.number,
+    generated: true,
+  });
+  return [generated(`Cost ${cost}`), generated(type === 'creature' ? `Creature ${power}/${health}` : 'Spell')];
+}
+
 function splitSections(text: string): SplitResult {
   const lines = sourceLines(text);
   const sections: Section[] = [];
   const diagnostics: Diagnostic[] = [];
   let current: Section | undefined;
 
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex]!;
     if (isIgnorable(line)) continue;
     const content = lineText(line);
-    // `Creature Giant Golem 6/6` — a creature definition, a card without a cost that effects make.
-    const definition = /^creature\s+(.+?)\s+(\d+)\s*\/\s*(\d+)\s*\.?$/i.exec(content);
-    if (definition) {
+    // `Creature Giant Golem` — a creature definition: a card without a cost that effects make. Its
+    // header follows, like a card's. (`Creature 2/2` inside a card is the retired stat line, not a heading.)
+    const definition = /^creature\s+(.+?)\s*\.?$/i.exec(content);
+    const isHeading = definition && (/\s\d+\s*\/\s*\d+$/.test(definition[1]!) || !definition[1]!.includes('/'));
+    if (definition && isHeading && !(current?.kind === 'card' && /^\d+\s*\/\s*\d+$/.test(definition[1]!))) {
       const name = definition[1]!.trim();
       const at = line.contentStart + content.indexOf(name);
-      const header = (text: string): SourceLine => ({
-        text,
-        start: line.start,
-        contentStart: line.contentStart,
-        contentEnd: line.contentEnd,
-        number: line.number,
-      });
       const section: CardSection = {
         kind: 'card',
         token: true,
         heading: line,
         name,
         nameSpan: { start: at, end: at + name.length },
-        lines: [header('Cost 0'), header(`Creature ${definition[2]}/${definition[3]}`)],
+        lines: [],
       };
+      if (/\s\d+\s*\/\s*\d+$/.test(name)) {
+        diagnostics.push({
+          severity: 'error',
+          message: `a creature definition's stats are in its header now — write "Creature ${name.replace(/\s+\d+\s*\/\s*\d+$/, '')}" and then ${HEADER_SHAPE_TOKEN}`,
+          code: 'card-header-old',
+          start: line.contentStart,
+          end: line.contentEnd,
+        });
+      }
       sections.push(section);
       current = section;
+      continue;
+    }
+    // The JSON header: the first thing under a card's heading.
+    if (current?.kind === 'card' && current.lines.length === 0 && current.headerSpan === undefined && content.startsWith('{')) {
+      const endIndex = headerEnd(lines, lineIndex);
+      const last = lines[endIndex]!;
+      const raw = text.slice(line.contentStart, last.contentEnd);
+      current.headerSpan = { start: line.contentStart, end: last.contentEnd };
+      current.lines.push(...headerLines(raw, line.contentStart, current.token === true, line, last, (d) => diagnostics.push(d)));
+      lineIndex = endIndex;
       continue;
     }
     if (/^contest\b/i.test(content)) {
@@ -424,7 +574,7 @@ function splitSections(text: string): SplitResult {
         if (name.length === 0) {
           diagnostics.push({
             severity: 'error',
-            message: 'a buff needs a name — write "Buff <name>", e.g. "Buff Frailty (stacks)"',
+            message: 'a buff needs a name — write "Buff <name>", e.g. "Buff Frailty"',
             code: 'buff-name-missing',
             start: line.contentStart,
             end: line.contentEnd,
@@ -446,6 +596,17 @@ function splitSections(text: string): SplitResult {
     current.lines.push(line);
   }
 
+  for (const section of sections) {
+    if (section.kind === 'card' && section.token && section.headerSpan === undefined && !diagnostics.some((d) => d.code === 'card-header-old' && d.start === section.heading.contentStart)) {
+      diagnostics.push({
+        severity: 'error',
+        message: `"${section.name}" needs a header under its name — ${HEADER_SHAPE_TOKEN}`,
+        code: 'card-header-missing',
+        start: section.heading.contentStart,
+        end: section.heading.contentEnd,
+      });
+    }
+  }
   const cards = sections.filter((s): s is CardSection => s.kind === 'card');
   const buffs = sections.filter((s): s is BuffSectionSrc => s.kind === 'buff');
   const zoneSections = sections.filter((s): s is ZoneSectionSrc => s.kind === 'zone');
@@ -562,8 +723,8 @@ type LineClass =
   | { readonly kind: 'legacy'; readonly word: 'battlecry' | 'deathrattle' }
   | { readonly kind: 'unknown' };
 
-/** `When this enters play [from <zone>] …` — `this`, `this card`, `this character`. */
-const ENTERS_PLAY = /^when\s+this(?:\s+(?:card|character))?\s+enters\s+play\b/i;
+/** `When this enters play [from <zone>] …` — `this`. */
+const ENTERS_PLAY = /^when\s+this\s+enters\s+play\b/i;
 
 /**
  * The `<effect>` of a `… then <effect>.` line, and where it starts. Returns
@@ -599,17 +760,18 @@ function classify(
   const content = lineText(line);
   const lower = content.toLowerCase();
 
+  // `Cost`, `Creature p/h` and `Spell` are read only from the line the JSON header was turned into.
   if (/^cost\b/.test(lower)) {
-    const match = /^cost\s+([0-9]+)\s*\.?\s*$/i.exec(content);
+    const match = line.generated ? /^cost\s+([0-9]+)\s*\.?\s*$/i.exec(content) : null;
     return match ? { kind: 'cost', value: Number(match[1]) } : { kind: 'unknown' };
   }
   if (/^creature\b/.test(lower)) {
-    const match = /^creature\s+([0-9]+)\s*\/\s*([0-9]+)\s*\.?\s*$/i.exec(content);
+    const match = line.generated ? /^creature\s+([0-9]+)\s*\/\s*([0-9]+)\s*\.?\s*$/i.exec(content) : null;
     return match
       ? { kind: 'creature', power: Number(match[1]), health: Number(match[2]) }
       : { kind: 'unknown' };
   }
-  if (/^spell\s*\.?\s*$/.test(lower)) return { kind: 'spell' };
+  if (/^spell\s*\.?\s*$/.test(lower)) return line.generated ? { kind: 'spell' } : { kind: 'unknown' };
   const entry = parseEntryRule(content);
   if (entry) return { kind: 'entry', rules: entry };
   // `Suspend: Move this card to the Suspend zone with 5 counters on it.` — an ability the card has in hand.
@@ -815,8 +977,10 @@ function parseCard(section: CardSection, registry: KeywordRegistry): CardParse {
         const known = registry.names.map((name) => `${name}.`).join(', ');
         fail(
           line,
-          `"${lineText(line)}" is not a card line — use "Cost <n>", "Creature <power>/<health>", "Spell", one of the keywords (${known}), "When … then …", or an effect sentence`,
-          'card-unknown-line',
+          /^(cost\b|creature\s+\d|spell\s*\.?$)/i.test(lineText(line))
+            ? `"${lineText(line)}" — the card's cost and type are a JSON header now: ${HEADER_SHAPE_CARD}`
+            : `"${lineText(line)}" is not a card line — the header is a JSON object, then one of the keywords (${known}), "When … then …", or an effect sentence`,
+          /^(cost\b|creature\s+\d|spell\s*\.?$)/i.test(lineText(line)) ? 'card-header-old' : 'card-unknown-line',
         );
         break;
       }
@@ -824,20 +988,14 @@ function parseCard(section: CardSection, registry: KeywordRegistry): CardParse {
   }
 
   if (!sawCostLine) {
-    fail(section.heading, `"${section.name}" has no cost — add a "Cost <n>" line`, 'card-cost-missing');
+    if (section.headerSpan === undefined) {
+      fail(section.heading, `"${section.name}" has no header — add ${HEADER_SHAPE_CARD}`, 'card-header-missing');
+    }
   }
-  if (!sawKindLine) {
-    fail(
-      section.heading,
-      `"${section.name}" does not say what it is — add "Creature <power>/<health>" or "Spell"`,
-      'card-kind-missing',
-    );
-  }
-
   // The retired shorthand: name the explicit event to write instead. The
   // kind is only known after the whole card is read, so this waits.
   for (const { line, word } of legacyLines) {
-    const explicit = word === 'battlecry' ? 'When this enters play then <effect>' : 'When this dies then <effect>';
+    const explicit = word === 'battlecry' ? 'When this enters play then <effect>' : 'When this is destroyed then <effect>';
     fail(
       line,
       kind === 'spell'
@@ -892,7 +1050,7 @@ function parseCard(section: CardSection, registry: KeywordRegistry): CardParse {
       if (cls.kind !== 'effect') continue;
       fail(
         line,
-        `a creature's one-shot effect needs a word to say *when* it happens — write "When this enters play then ${lineText(line)}" for entering play, "When this dies then ${lineText(line)}" for dying, or "When … then …" for a standing trigger`,
+        `a creature's one-shot effect needs a word to say *when* it happens — write "When this enters play then ${lineText(line)}" for entering play, "When this is destroyed then ${lineText(line)}" for dying, or "When … then …" for a standing trigger`,
         'card-creature-effect-bare',
       );
     }
@@ -982,10 +1140,15 @@ export function compileCardDocument(text: string, options: CardCompileOptions = 
     zoneDefs.push(zoneDefOf(section));
   }
   // Contests the document defines (`Contest Rock Paper Scissors`) can be played by name.
+  // They are read by the same parser as everything else: the sections go through the language
+  // verbatim, and what comes out is each contest as data.
   const contests: ContestIR[] = [...(options.contests ?? [])];
-  for (const section of split.contestSections) {
-    const defined = contestOf(section, push);
-    if (defined) contests.push(defined);
+  if (split.contestSections.length > 0) {
+    const lines: SynthLine[] = split.contestSections.flatMap((section) => [verbatim(section.heading), ...section.lines.map(verbatim)]);
+    const synthetic = buildSynthetic(lines, text.length);
+    const compiled = compileDocument(synthetic.text, { ...options, zones: declaredZones });
+    contests.push(...compiled.contests);
+    for (const diagnostic of compiled.diagnostics) push(remap(diagnostic, synthetic, text.length));
   }
   const creatureNames = split.cards.filter((section) => section.token).map((section) => section.name);
   options = { ...options, zones: declaredZones, contests, creatures: [...(options.creatures ?? []), ...creatureNames] };
@@ -1047,7 +1210,7 @@ export function compileCardDocument(text: string, options: CardCompileOptions = 
         continue;
       }
       if (cls.kind === 'trigger') {
-        // `When this dies then …` and other standing triggers: the ability
+        // `When this is destroyed then …` and other standing triggers: the ability
         // grammar compiles them, and the creature carries them in play.
         arrivalLines.push(verbatim(line));
         continue;
@@ -1173,16 +1336,6 @@ export function compileCardDocument(text: string, options: CardCompileOptions = 
 
 /* -------------------------------- helpers -------------------------------- */
 
-/** A `Contest` section as data — see `contest.ts` for the rules it can state. */
-function contestOf(section: ContestSectionSrc, push: (diagnostic: Diagnostic) => void): ContestIR | undefined {
-  const { contest, problems } = parseContest(
-    section.name,
-    section.lines.map((line) => ({ text: lineText(line), start: line.contentStart, end: line.contentEnd })),
-  );
-  for (const problem of problems) push({ severity: 'error', ...problem });
-  return contest;
-}
-
 /**
  * The zone a `Zone` heading declares. Options, comma separated: `per-player` or `shared`
  * (default shared); `public`, `owner` or `hidden` for who may look (default public);
@@ -1282,9 +1435,7 @@ function sortDiagnostics(diagnostics: readonly Diagnostic[]): Diagnostic[] {
 
 /** Card heading words, shown at the start of a line inside a card. */
 export const CARD_LINE_STARTERS = [
-  'Cost',
-  'Creature',
-  'Spell',
+  '{ "cost"',
   'Taunt.',
   'Charge.',
   'When',
@@ -1294,18 +1445,18 @@ export const CARD_LINE_STARTERS = [
 /** Hover help for the card-shaped words. */
 export const CARD_WORD_DOCS: Readonly<Record<string, string>> = {
   card: '`Card <name>` starts a card section. Everything until the next "Card"/"Buff" heading belongs to it.',
-  cost: '`Cost <n>` — the mana the card costs to play. Required, once per card.',
-  creature: '`Creature <power>/<health>` — a minion with a stat line, e.g. "Creature 3/2".',
-  spell: '`Spell` — a one-shot card. Its effect sentences are written plainly, without a prefix.',
+  cost: '`"cost": <n>` — in the card\'s JSON header: the mana the card costs to play. Required.',
+  creature: '`"type": "creature"` with `"creatureConfig": { "power": 3, "health": 2 }` — a minion with a stat line. Settings that belong to a kind of permanent live under their own key.',
+  spell: '`"type": "spell"` — a one-shot card. Its effect sentences are written plainly, without a prefix.',
   // Derived from the registered keywords, so the wording lives in one place
   // (`src/english/glossary.ts`).
   taunt: BUILTIN_KEYWORDS.find((def) => def.name === 'Taunt')!.details!,
   charge: BUILTIN_KEYWORDS.find((def) => def.name === 'Charge')!.details!,
-  when: '`When … then …` names the event and what happens: "When this enters play then …", "When this dies then …", "When this takes damage then …".',
+  when: '`When … then …` names the event and what happens: "When this enters play then …", "When this is destroyed then …", "When this is damaged then …".',
   enters: '`When this enters play then <effect>.` — the creature\'s effect the moment it lands. It may pick a target, exactly like an ability.',
   play: '`enters play` — the moment the creature is put onto the board.',
-  dies: '`When this dies then <effect>.` — the creature\'s last words, a trigger on `character:destroyed`.',
-  buff: '`Buff <name> (stacks)` declares a buff the document\'s cards can add. Buff sections are document-level, like in an ability document.',
+  destroyed: '`When this is destroyed then <effect>.` — the creature\'s last words, a trigger on `character:destroyed`.',
+  buff: '`Buff <name>` declares a buff the document\'s cards can add. Buff sections are document-level, like in an ability document.',
 };
 
 /** Vocabulary help for a word in a card document (card words first). */
@@ -1361,9 +1512,11 @@ function lineStarters(
   const byLabel = (label: string): Suggestion =>
     STARTER_SUGGESTIONS.find((s) => s.label === label) ?? suggestion(label, cardWordDoc(label));
   const out: Suggestion[] = [];
-  if (!hasCost) out.push(byLabel('Cost'));
-  if (!kind) {
-    out.push(byLabel('Creature'), byLabel('Spell'));
+  if (!hasCost && !kind) {
+    out.push(
+      suggestion('{ "cost": 3, "type": "spell" }', 'The card header, for a spell.'),
+      suggestion('{ "cost": 2, "type": "creature", "creatureConfig": { "power": 2, "health": 3 } }', 'The card header, for a creature.'),
+    );
   } else if (kind === 'creature') {
     // A creature's one-shot effect names its event (`When … then …`), plus
     // every keyword registered for creatures.
@@ -1390,12 +1543,12 @@ function lineStarters(
 /** Whole event phrases offered on a `When …` line before its `then`. */
 const TRIGGER_EVENT_SUGGESTIONS: readonly Suggestion[] = [
   suggestion('this enters play', 'When this enters play then <effect> — fires the moment the creature lands.'),
-  suggestion('this dies', 'When this dies then <effect> — the creature\'s last words.'),
-  suggestion('this takes damage', 'When this takes damage then <effect>.'),
+  suggestion('this is destroyed', 'When this is destroyed then <effect> — the creature\'s last words.'),
+  suggestion('this is damaged', 'When this is damaged then <effect>.'),
   suggestion('this is healed', 'When this is healed then <effect>.'),
-  suggestion('a character dies', 'When a character dies then <effect>.'),
-  suggestion('1 or more characters die', 'When 1 or more characters die then <effect>.'),
-  suggestion('characters survive', 'When characters survive then <effect>.'),
+  suggestion('a character is destroyed', 'When a character is destroyed then <effect>.'),
+  suggestion('1 or more characters are destroyed', 'When 1 or more characters are destroyed then <effect>.'),
+  suggestion('characters survives', 'When characters survives then <effect>.'),
 ];
 
 /**
@@ -1430,7 +1583,7 @@ export function completeCardAt(
   // A heading line: the name after "Card"/"Buff" is free text.
   if (section && section.heading.start === line.start) {
     if (/^buff\b/i.test(trimmed)) {
-      return trimmed.includes('(') && !trimmed.includes(')') ? [suggestion('stacks'), suggestion('weight')] : [];
+      return [];
     }
     if (/^card\b/i.test(trimmed)) return [];
     return [...HEADING_SUGGESTIONS];
@@ -1448,7 +1601,7 @@ export function completeCardAt(
     return lineStarters(section?.kind === 'card' ? section : undefined, keywords);
   }
 
-  if (/^cost\b/i.test(lower) || /^creature\b/i.test(lower)) return [];
+  if (/^cost\b/i.test(lower) || /^creature\b/i.test(lower) || trimmed.startsWith('{')) return [];
   // Already a keyword line: nothing more to offer on it.
   if (keywords.matchAtStart(trimmed)) return [];
   if (/^spell\s*\.?\s*$/i.test(lower)) {

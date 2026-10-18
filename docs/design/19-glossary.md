@@ -115,7 +115,7 @@ selecting a word can never play a card or start an attack by accident.
 
 **The editors** now share one `glossaryAt()` lookup (the two hovers used to
 disagree about buffs), and the document being typed is itself a **source** — a
-`Buff Frailty (stacks)` heading declares a term the sentences below refer to,
+`Buff Frailty` heading declares a term the sentences below refer to,
 found by a text scan so it works while the body is still half-written.
 
 ## Recursion — a definition is glossed too

@@ -89,7 +89,7 @@ describe('applying the rules is the upkeep', () => {
     expect(side.hand.size).toBe(4); // the draw rule
   });
 
-  it('runs turn:end rules when the turn ends', async () => {
+  it('runs turn:end rules when a turn ends then', async () => {
     const { game, alice } = match([
       ...CARD_RULES,
       rule({
@@ -129,7 +129,7 @@ describe('a revealed card can change the rules', () => {
     game.rules.add(
       rule({
         id: 'draw',
-        name: 'At the start of your turn, draw two cards.',
+        name: 'When your turn starts then draw two cards.',
         actions: [{ kind: 'draw', count: 2 }],
       }),
     );
@@ -146,7 +146,7 @@ describe('a revealed card can change the rules', () => {
     game.rules.add(
       rule({
         id: 'inspiration',
-        name: 'At the start of your turn, draw an extra card.',
+        name: 'When your turn starts then draw an extra card.',
         actions: [{ kind: 'draw', count: 1 }],
       }),
     );
@@ -191,7 +191,7 @@ describe('a revealed card can change the rules', () => {
 
   it('can be given a whole rule set by the host', async () => {
     const { game, alice } = match([
-      rule({ id: 'refill', name: 'At the start of your turn, your mana refills.', actions: [{ kind: 'refill-mana' }] }),
+      rule({ id: 'refill', name: 'When your turn starts then your mana refills.', actions: [{ kind: 'refill-mana' }] }),
     ]);
     await game.setup();
     await game.collectUserDecisions();

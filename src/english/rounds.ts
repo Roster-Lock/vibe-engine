@@ -4,14 +4,14 @@
  * (docs/design/20-secret-choices-and-dice.md).
  *
  * ```
- * Each player commits a card from their hand face down.
+ * All players commit a card from their hand face down.
  * When they are ready, reveal.
- * Each player puts the card they committed into their garbage.
+ * All players move the card they committed to their garbage.
  * ```
  *
  * The verb carries the difference. **Commit** is sealed and simultaneous: the
  * answer is placed face down and cannot be changed or seen until the reveal.
- * **Choose** is open, in turn order, and each player sees the earlier answers.
+ * **Choose** is open, in turn order, and every player sees the earlier answers.
  * (A choice made in private is not a *commitment* — a player can pick something
  * secretly and still change their mind — which is why "in secret" was not
  * enough.)
@@ -27,15 +27,10 @@ export function pronounOf(players: ChoosersIR): 'you' | 'they' {
   return players === 'you' ? 'you' : 'they';
 }
 
-/** `Each player`, `Each opponent`, `You`. */
+/** `All players`, `All opponents`, `You`. */
 export function playersText(players: ChoosersIR): string {
   if (players === 'you') return 'You';
-  return players === 'each' ? 'Each player' : 'Each opponent';
-}
-
-/** `chooses` for a third person, `choose` for `You`. */
-function verb(players: ChoosersIR, third: string, second: string): string {
-  return players === 'you' ? second : third;
+  return players === 'each' ? 'All players' : 'All opponents';
 }
 
 /** `your` / `their` — whose zone it is. */
@@ -49,8 +44,8 @@ export type ChoicePick =
   | { readonly kind: 'number'; readonly min: number; readonly max: number };
 
 /**
- * `Each player commits a card from their hand face down.` (sealed) /
- * `Each player chooses a card from their hand.` (open)
+ * `All players commit a card from their hand face down.` (sealed) /
+ * `Starting with you, each player chooses a card from their hand.` (open)
  */
 export function chooseText(
   players: ChoosersIR,
@@ -63,8 +58,24 @@ export function chooseText(
     pick.kind === 'card'
       ? `a card from ${possessiveOf(players)} ${pick.zone}`
       : `a number from ${pick.min} to ${pick.max}`;
-  const action = secret ? verb(players, 'commits', 'commit') : verb(players, 'chooses', 'choose');
-  return `${playersText(players)} ${action} ${what}${secret ? ' face down' : ''}.`;
+  return choiceSentence(players, secret ? 'commit' : 'choose', what, secret, order, players !== 'you');
+}
+
+/** One choice sentence; an open choice by a non-default order opens with it (`In reverse order, each player chooses …`). A ballot always does. */
+function choiceSentence(
+  players: ChoosersIR,
+  action: string,
+  what: string,
+  secret: boolean,
+  order: ChooseOrderIR,
+  alwaysOrdered = false,
+): string {
+  // One at a time is `Each player chooses`; all at once is `All players commit`.
+  const who = secret || players === 'you' ? playersText(players) : players === 'each' ? 'Each player' : 'Each opponent';
+  const verb = !secret && players !== 'you' ? `${action}s` : action;
+  const body = `${who} ${verb} ${what}${secret ? ' face down' : ''}.`;
+  if (secret || (order === 'caster-first' && !alwaysOrdered)) return body;
+  return `${VOTE_OPENING[order]}, ${body.charAt(0).toLowerCase()}${body.slice(1)}`;
 }
 
 /* -------------------------------- votes -------------------------------- */
@@ -81,7 +92,7 @@ export function labelList(options: readonly string[]): string {
   return `${labels.slice(0, -1).join(', ')} or ${labels[labels.length - 1]}`;
 }
 
-/** The opening words of an open vote, by who goes first. */
+/** The opening words of an open choice, by who goes first. */
 export const VOTE_OPENING: Readonly<Record<ChooseOrderIR, string>> = {
   'caster-first': 'Starting with you',
   'caster-last': 'Ending with you',
@@ -90,20 +101,20 @@ export const VOTE_OPENING: Readonly<Record<ChooseOrderIR, string>> = {
 };
 
 /**
- * A vote, in the wording of its kind:
+ * A choice between names — the ballot of a vote — in the wording of its kind:
  *
  * ```
- * Each player commits a vote for Attack or Retreat face down.     (sealed)
- * Starting with you, each player votes for Attack or Retreat.     (caster first)
- * Ending with you, each player votes for Attack or Retreat.       (caster last)
- * Starting with a random player, each player votes for …          (random start)
- * In reverse order, each player votes for …                       (the seating backwards)
+ * All players commit Attack or Retreat face down.                 (sealed: all at once)
+ * Starting with you, each player chooses Attack or Retreat.        (open: round the table, caster first)
+ * Ending with you, each player chooses Attack or Retreat.          (caster last)
+ * Starting with a random player, each player chooses …             (random start)
+ * In reverse order, each player chooses …                          (the seating backwards)
  * ```
+ *
+ * `votes for Attack` then counts the choices.
  */
 export function voteText(options: readonly string[], secret: boolean, order: ChooseOrderIR): string {
-  return secret
-    ? `Each player commits a vote for ${labelList(options)} face down.`
-    : `${VOTE_OPENING[order]}, each player votes for ${labelList(options)}.`;
+  return choiceSentence('each', secret ? 'commit' : 'choose', labelList(options), secret, order, true);
 }
 
 /** `votes for Attack` — how many votes an option got. */
@@ -119,11 +130,11 @@ export function pastVerb(secret: boolean): 'committed' | 'chose' {
 /** The reveal step. `they` points back at whoever just chose. */
 export const REVEAL_TEXT = 'When they are ready, reveal.';
 
-/** `Each player puts the card they committed into their garbage.` */
+/** `All players move the card they committed to their garbage.` */
 export function moveChosenText(players: ChoosersIR, zone: string, secret: boolean): string {
   return (
-    `${playersText(players)} ${verb(players, 'puts', 'put')} the card ${pronounOf(players)} ${pastVerb(secret)} ` +
-    `into ${possessiveOf(players)} ${zone}.`
+    `${playersText(players)} move the card ${pronounOf(players)} ${pastVerb(secret)} ` +
+    `to ${possessiveOf(players)} ${zone}.`
   );
 }
 
@@ -138,19 +149,19 @@ export function rollText(count: number, sides: number): string {
 }
 
 /**
- * The words for a roll's outcome in an amount: `that total` (also `that value`,
- * `that result`; for one die it is the die), `that highest die`, `that lowest
+ * The words for a roll's outcome in an amount: `that value` (the sum; for one die
+ * it is the die), `that highest die`, `that lowest
  * die`. **`that`** always means the most recent roll — there is no `the`, so a
  * reader never has to wonder which of several rolls is meant. To keep an earlier
  * roll, store it: "Store that value as AttackerRoll." and use the name.
  */
 export function rollPhrase(stat: RollStat): string {
-  return stat === 'total' ? 'that total' : `that ${stat} die`;
+  return stat === 'total' ? 'that value' : `that ${stat} die`;
 }
 
-/** The stat a word after `that` names — `total`/`value`/`result`, `highest`, `lowest`. */
+/** The stat a word after `that` names — `value`, `highest`, `lowest`. */
 export function rollStatOf(word: string): RollStat | undefined {
-  if (word === 'total' || word === 'value' || word === 'result') return 'total';
+  if (word === 'value') return 'total';
   if (word === 'highest' || word === 'lowest') return word;
   return undefined;
 }
@@ -158,7 +169,7 @@ export function rollStatOf(word: string): RollStat | undefined {
 /* ----------------------- abilities a zone gives ----------------------- */
 
 /**
- * `Cards in your boxed zone have Open Present for each opponent.` The word `zone`
+ * `Cards in your boxed zone have Open Present for all opponents.` The word `zone`
  * is always written (it is optional to read): "your hand zone", "the stack zone".
  */
 export function zoneAbilityText(
@@ -178,17 +189,17 @@ export function zoneAbilityText(
   return `Cards in ${zoneOwnerWords(owners, zone)} zone have ${abilityName} for ${playerArgument(users)}.`;
 }
 
-/** `your boxed`, `each player's boxed`, `the stack` — whose zone, and which. */
+/** `your boxed`, `all players' boxed`, `the stack` — whose zone, and which. */
 function zoneOwnerWords(owners: ChoosersIR | 'shared' | 'this', zone: string): string {
   const whose =
-    owners === 'you' ? 'your' : owners === 'each' ? "each player's" : owners === 'opponents' ? "each opponent's" : 'the';
+    owners === 'you' ? 'your' : owners === 'each' ? "all players'" : owners === 'opponents' ? "all opponents'" : 'the';
   return `${whose} ${zone}`;
 }
 
 /* ------------------------------ this card ------------------------------ */
 
 /** `Reveal this card.` */
-export const REVEAL_CARD_TEXT = 'Reveal this card.';
+export const REVEAL_CARD_TEXT = 'Reveal this.';
 
 /** `Move this card to its owner's garbage.` */
 export function moveCardText(
@@ -199,7 +210,7 @@ export function moveCardText(
   const where = article === 'the' ? `the ${zone} zone` : `its owner's ${zone}`;
   const kind = counters?.kind ? `${counters.kind} ` : '';
   const with_ = counters ? ` with ${counters.count} ${kind}counter${counters.count === 1 ? '' : 's'} on it` : '';
-  return `Move this card to ${where}${with_}.`;
+  return `Move this to ${where}${with_}.`;
 }
 
 /** `Remove a counter from all cards in this zone.` */
@@ -244,9 +255,9 @@ function cardSelectorBase(select: CardSelectorIR): string {
 }
 
 /** Zones that read as nouns on their own; any other is written with "zone" after it ("your stolen zone"). */
-const NOUN_ZONES = new Set(['hand', 'deck', 'library', 'garbage', 'graveyard', 'play', 'stack', 'active', 'revealed']);
+const NOUN_ZONES = new Set(['hand', 'deck', 'library', 'garbage', 'play', 'stack', 'active', 'revealed']);
 
-/** `your hand` / `its owner's garbage` / `target opponent's hand` / `each opponent's hand` / `the play`. */
+/** `your hand` / `its owner's garbage` / `target opponent's hand` / `all opponents' hand` / `the play`. */
 export function zoneRefText(ref: ZoneRefIR): string {
   const zone = NOUN_ZONES.has(ref.zone) || ref.whose === 'temporary' ? ref.zone : `${ref.zone} zone`;
   const where = ref.position ? `the ${ref.position} of ` : '';
@@ -266,9 +277,9 @@ function zoneRefBase(ref: ZoneRefIR, zone: string): string {
     case 'opponent':
       return `target opponent's ${zone}`;
     case 'opponents':
-      return `each opponent's ${zone}`;
+      return `all opponents' ${zone}`;
     case 'each':
-      return `each player's ${zone}`;
+      return `all players' ${zone}`;
     case 'shared':
       return zone === 'play' ? 'play' : `the ${zone}`;
   }
@@ -277,7 +288,7 @@ function zoneRefBase(ref: ZoneRefIR, zone: string): string {
 /** `from your hand` — or, for a source that is not a zone, `castable by target opponent`. */
 function sourceText(from: CardSourceIR): string {
   if ('castableBy' in from) {
-    const who = { you: 'you', opponent: 'target opponent', opponents: 'each opponent', each: 'each player' }[from.castableBy];
+    const who = { you: 'you', opponent: 'target opponent', opponents: 'all opponents', each: 'all players' }[from.castableBy];
     return `castable by ${who}`;
   }
   return `from ${zoneRefText(from)}`;
@@ -319,8 +330,8 @@ export function revealCardsText(select: CardSelectorIR, from: CardSourceIR): str
  */
 export function castCardText(otherwiseZone?: string): string {
   return otherwiseZone === undefined
-    ? 'Cast this card if you can.'
-    : `Cast this card if you can, otherwise move it to its owner's ${otherwiseZone}.`;
+    ? 'Cast this if you can.'
+    : `Cast this if you can, otherwise move it to its owner's ${otherwiseZone}.`;
 }
 
 /* --------------------------- variables & draw ------------------------- */
@@ -330,22 +341,56 @@ export function storeText(valueText: string, name: string): string {
   return `Store ${valueText} as ${name}.`;
 }
 
-/** `you`, `each player`, `each opponent` — the player argument of `Draw`. */
+/** `you`, `all players`, `all opponents` — the player argument of `Draw`. */
 export function playerArgument(players: ChoosersIR | 'winners' | 'losers'): string {
   return players === 'you'
     ? 'you'
     : players === 'each'
-      ? 'each player'
+      ? 'all players'
       : players === 'winners'
         ? 'the winners'
         : players === 'losers'
           ? 'the losers'
-          : 'each opponent';
+          : 'all opponents';
 }
 
-/** `you`, `the opponent`, `the winners`, `the losers` — after "owned by". */
+/** `you`, `opponents`, `the winners`, `the losers` — after "owned by". */
 export function ownerWords(owner: 'you' | 'opponent' | 'winners' | 'losers'): string {
-  return owner === 'you' ? 'you' : owner === 'opponent' ? 'the opponent' : `the ${owner}`;
+  return owner === 'you' ? 'you' : owner === 'opponent' ? 'opponents' : `the ${owner}`;
+}
+
+/** `player 1 win and player 2 lose` — the players a rule names, winners then losers. */
+function outcomeText(winners: readonly number[], losers: readonly number[]): string {
+  return [...winners.map((player) => `player ${player} win`), ...losers.map((player) => `player ${player} lose`)].join(' and ');
+}
+
+/**
+ * A contest as the section that defines it — one line per statement, the same words the
+ * parser reads (a ballot of names is just the sealed `commit` sentence).
+ *
+ * ```
+ * Contest Rock Paper Scissors
+ * Players 2.
+ * All players commit Rock, Paper or Scissors face down.
+ * When they are ready, reveal.
+ * If all players committed the same option, it is a tie.
+ * If player 1 committed Rock and player 2 committed Scissors, player 1 win and player 2 lose.
+ * Otherwise player 2 win and player 1 lose.
+ * ```
+ */
+export function contestLines(contest: ContestIR): string[] {
+  return [
+    `Contest ${contest.name}`,
+    ...(contest.playerCount !== undefined ? [`Players ${contest.playerCount}.`] : []),
+    voteText(contest.options, true, 'caster-first'),
+    REVEAL_TEXT,
+    ...contest.rules.map((rule) => {
+      if (rule.kind === 'tie') return 'If all players committed the same option, it is a tie.';
+      if (rule.kind === 'otherwise') return `Otherwise ${outcomeText(rule.winners, rule.losers)}.`;
+      const picks = rule.picks.map((pick) => `player ${pick.player} committed ${labelText(pick.option)}`).join(' and ');
+      return `If ${picks}, ${outcomeText(rule.winners, rule.losers)}.`;
+    }),
+  ];
 }
 
 /** `Create a Giant Golem.` / `The winners create a Giant Golem.` */
@@ -358,21 +403,21 @@ export function createText(players: PlayerListIR, creature: string): string {
       : players === 'losers'
         ? 'The losers create'
         : players === 'each'
-          ? 'Each player creates'
-          : 'Each opponent creates';
+          ? 'All players create'
+          : 'All opponents create';
   return `${who} ${article} ${creature}.`;
 }
 
-/** `Each player plays Rock Paper Scissors.` / `You and target opponent play Rock Paper Scissors.` */
+/** `All players play Rock Paper Scissors.` / `You and target opponent play Rock Paper Scissors.` */
 export function playText(players: ContestPlayersIR, contest: ContestIR): string {
   const who =
     players === 'you'
       ? 'You play'
       : players === 'each'
-        ? 'Each player plays'
+        ? 'All players play'
         : players === 'you-and-opponent'
           ? 'You and target opponent play'
-          : 'Each opponent plays';
+          : 'All opponents play';
   return `${who} ${contest.name}.`;
 }
 

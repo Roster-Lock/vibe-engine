@@ -170,7 +170,7 @@ export function CardCreatePage({ onBack, onPlay }: { onBack: () => void; onPlay:
       </header>
 
       <p className="creator-intro">
-        Write a card in English — <code>Card Fireball</code>, <code>Cost 4</code>, <code>Spell</code>,
+        Write a card in English — <code>Card Fireball</code>, a JSON header such as <code>{`{ "cost": 4, "type": "spell" }`}</code>,
         then <code>Deal 6 damage to target enemy character.</code> The editor autocompletes every word
         and compiles the card into something you can play.
       </p>

@@ -40,7 +40,6 @@ const rage = buff({
   name: 'Rage',
   description: '+3 power',
   weight: 5,
-  stacks: true,
 });
 
 function options(): ReturnType<typeof uiGlossaryOptions> {

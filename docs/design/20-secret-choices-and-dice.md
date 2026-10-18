@@ -11,9 +11,9 @@
 
 Three things a card game needs that the engine cannot say today:
 
-1. **Simultaneous hidden choices.** *"Each player commits a card from their hand
+1. **Simultaneous hidden choices.** *"All players commit a card from their hand
    face down. When they are ready, reveal. Each player puts the card they
-   committed into their garbage."* / *"Each player commits a number from 1 to 6
+   committed into their garbage."* / *"All players commit a number from 1 to 6
    face down."*
 2. **Choosing things that are not characters.** `SelectRequest.options` is
    `Character[]`, so a hand card (a plain `Entity`) cannot be offered, and there
@@ -47,11 +47,11 @@ So the verb carries the difference:
 | `choose …` | **open**, in turn order | Starting with the controller; each later chooser sees the earlier answers. |
 
 ```
-Each player commits a card from their hand face down.
+All players commit a card from their hand face down.
 When they are ready, reveal.
-Each player puts the card they committed into their garbage.
+All players move the card they committed to their garbage.
 
-Each player commits a number from 1 to 6 face down.
+All players commit a number from 1 to 6 face down.
 When they are ready, reveal.
 ```
 
@@ -213,14 +213,14 @@ them — the safe rule. A name that is not on the ballot is invalid (and, in a s
 
 | Kind | Wording | Who answers, in what order |
 | --- | --- | --- |
-| Commit / reveal | `Each player commits a vote for Attack or Retreat face down.` then `When they are ready, reveal.` | Everyone at once; nothing is seen until the reveal. |
-| The caster first | `Starting with you, each player votes for Attack or Retreat.` | The caster, then round the table in seating order. |
-| The caster last | `Ending with you, each player votes for Attack or Retreat.` | Round the table in seating order, ending with the caster. |
-| A random start | `Starting with a random player, each player votes for Attack or Retreat.` | A die roll with one face per seat chooses who is first; then round the table. |
-| Reverse order | `In reverse order, each player votes for Attack or Retreat.` | The seating backwards (last seat first). **The caster's seat plays no part**, which is the "start doesn't matter" kind. |
+| Commit / reveal | `All players commit Attack or Retreat face down.` then `When they are ready, reveal.` | Everyone at once; nothing is seen until the reveal. |
+| The caster first | `All players choose Attack or Retreat.` | The caster, then round the table in seating order. |
+| The caster last | `Ending with you, all players choose Attack or Retreat.` | Round the table in seating order, ending with the caster. |
+| A random start | `Starting with a random player, all players choose Attack or Retreat.` | A die roll with one face per seat chooses who is first; then round the table. |
+| Reverse order | `In reverse order, all players choose Attack or Retreat.` | The seating backwards (last seat first). **The caster's seat plays no part**, which is the "start doesn't matter" kind. |
 
 - An open vote's order is in its opening words; **an open vote must say one**, so
-  "who goes first" is never left to a table to guess. `Each player chooses a vote`
+  "who goes first" is never left to a table to guess. `All players choose a vote`
   is an error that lists the four.
 - The random start is a **real roll** through the dice machinery (`roll:made`, a
   replaceable roller), so a physical table rolls a real die, and the result is
@@ -238,7 +238,7 @@ them — the safe rule. A name that is not on the ballot is invalid (and, in a s
 recent vote — so it works anywhere an amount does:
 
 ```
-Starting with you, each player votes for Attack or Retreat.
+All players choose Attack or Retreat.
 If votes for Attack is higher than votes for Retreat, Deal 10 damage to this character.
 If votes for Attack is lower than votes for Retreat, Deal 20 damage to this character.
 If votes for Attack is the same as votes for Retreat, Deal 1 damage to this character.
@@ -291,7 +291,7 @@ a peer-to-peer game must not use one revealed seed for dice. (A server keeps its
 
 Every roll is its own commit/reveal round:
 
-1. Each player commits `H(salt_i ‖ secret_i)` for this roll.
+1. All players commit `H(salt_i ‖ secret_i)` for this roll.
 2. Once all commits are in, each reveals `secret_i` and `salt_i`; reveals are
    verified against the commits.
 3. The number is derived from a hash of **everything that identifies the roll**
@@ -312,7 +312,7 @@ Properties this buys:
   contribution cannot be replayed into a different roll. A *reroll* is simply the
   next roll, with fresh contributions.
 
-**Cheaper variant: hash chains.** Each player commits once, at game start, to the
+**Cheaper variant: hash chains.** All players commit once, at game start, to the
 end of a hash chain (`h_n = H(h_{n-1})`), and reveals the next link back for each
 roll. Anyone verifies a link by hashing it forward to the committed end. That is
 one message per roll instead of two round trips, with the same unpredictability.
@@ -778,15 +778,15 @@ await engine.useCardAbility(player, card, openPresent);
   that runs when the ability containing it does:
 
   ```
-  Cards in your boxed zone have Open Present for each opponent.
+  Cards in your boxed zone have Open Present for all opponents.
   ```
 
-  - *Whose zone:* `your`, `each player's`, `each opponent's`, or `the` for a shared
+  - *Whose zone:* `your`, `all players'`, `all opponents'`, or `the` for a shared
     one. A per-player zone has an instance per player, so this says which.
   - *Which ability:* a sibling in the same document, by name (any order). A name
     that is not there is an error that lists the abilities that are, or the one you
     probably meant.
-  - *Who may use it:* `for you`, `for each player`, `for each opponent`; without
+  - *Who may use it:* `for you`, `for all players`, `for all opponents`; without
     `for`, anyone. The zone's owner is not special.
   - It **adds** to what the zone already gives, and giving the same ability again
     replaces who may use *that* ability (`addZoneAbility`). The word `zone` is
@@ -809,21 +809,21 @@ await engine.useCardAbility(player, card, openPresent);
 
   ```
   Zone boxed
-  Cards in this zone have Open Present for each opponent.
+  Cards in this zone have Open Present for all opponents.
   ```
 
   - `Zone <name>` takes a zone from the game's zone list; the only statement it holds
     is `Cards in this zone have <ability> [for <players>].` Anything else in it, and
     "this zone" anywhere outside one, is an error that says why.
   - For a **per-player** zone it covers every player's instance, and "you" / "each
-    opponent" are relative to *that instance's owner*: the example lets each player's
+    opponent" are relative to *that instance's owner*: the example lets all players'
     opponents open their wrapped cards. A **shared** zone has no owner, so only
-    `for each player` is meaningful there — `for you` is an error when it is applied.
+    `for all players` is meaningful there — `for you` is an error when it is applied.
   - It is **applied by the host**: `compiled.zones[i].apply(engine)` once the game's
     zones and players exist (the zone name goes through the same aliases as every
     other). Applying it twice sets the same state. This keeps "the zone's declaration
     is data; the standing state is set while the game runs".
-  - The explicit form, `Cards in your boxed zone have Open Present for each opponent.`,
+  - The explicit form, `Cards in your boxed zone have Open Present for all opponents.`,
     remains for an effect that happens *during* the game (a spell that wraps the
     cards in your boxed zone) rather than at setup.
   - Written `Cards`, not `Card's`: the possessive would read as one card's zone.
@@ -942,8 +942,8 @@ first two, so they come last):
 4b. **English** — ✅ built. Three sentences, with the wording in one place
    (`src/english/rounds.ts`) so the parser's summaries and the IR renderer cannot
    drift:
-   `Each player commits a card from their hand face down.` (or `a number from 1
-   to 6`, `You commit …`, `Each opponent commits …`; the open form is `chooses`,
+   `All players commit a card from their hand face down.` (or `a number from 1
+   to 6`, `You commit …`, `All opponents commit …`; the open form is `chooses`,
    with no `face down`), `When they are ready, reveal.` (`When all players are
    ready, reveal.` is read too), and `Each player puts the card they committed
    into their garbage.` (`chose` after an open choice). "The card they committed"
@@ -968,8 +968,8 @@ first two, so they come last):
    before any. Tests: `test/dice.test.ts`. A runnable walk-through is `npm run example:rounds`
    (`src/examples/rounds-and-dice.ts`).
 6. **English** — ✅ built. `Roll a d20.` / `Roll 2d6.` (the `d` is glued to its
-   numbers). The outcome is read with **`that`**: `that total` (`that value` and
-   `that result` mean the same; for one die it is the die), `that highest die`,
+   numbers). The outcome is read with **`that`**: `that value` (`that value` and
+   `that value` mean the same; for one die it is the die), `that highest die`,
    `that lowest die` — anywhere an amount goes, and in a formula as `roll.total`.
    `That` is **always the most recent roll**. There is deliberately no `the
    total`: with several rolls it would not say which, and a second word for the
@@ -1005,7 +1005,7 @@ first two, so they come last):
      the die).
    - The roll is **read once**; the first line it falls in runs. That is the
      reason for a dedicated node (`EffectIR.table`, in the same step as the
-     `roll`) rather than `If that total is …` sentences: a line that rolls again
+     `roll`) rather than `If that value is …` sentences: a line that rolls again
      would change what every later `If` read. Tested: result 1 rolls a 20 and the
      `20` line does not then run.
    - **A result no line covers does nothing** (chosen over making it an error).
@@ -1024,12 +1024,12 @@ first two, so they come last):
    stored value) can gate one sentence without a table:
 
    ```
-   If that total is 15 or more, Deal 50 damage to this character.
+   If that value is 15 or more, Deal 50 damage to this character.
    If AttackerRoll is higher than DefenderRoll, Deal 10 damage to target enemy character.
-   Repeat up to 10 times while that total is 3 or less: Roll a d6.
+   Repeat up to 10 times while that value is 3 or less: Roll a d6.
    ```
 
-   - The value is any amount: `that total`, a stored name, or a formula.
+   - The value is any amount: `that value`, a stored name, or a formula.
    - The tests: `N` (equal), `N to M`, `N or more`, `N or less`; or a comparison
      with another amount — `higher than`, `lower than`, `the same as`.
    - It lowers to the **ordinary comparison predicate** the IR already has (`=`,
@@ -1047,8 +1047,8 @@ first two, so they come last):
    What happens at the edges is the game's to say: `onEmpty` (Hearthstone's
    fatigue) and `maxHand` / `overflow` (the burn). The card game's `Side.draw` is
    now exactly this function with those two rules. In the language it is
-   `Draw(you, 2).` / `Draw(each player, 1).` / `Draw(each opponent, 3).` — the
-   count is any amount (`Draw(you, that total).`, `Draw(each opponent, Pages).`).
+   `Draw(you, 2).` / `Draw(all players, 1).` / `Draw(all opponents, 3).` — the
+   count is any amount (`Draw(you, that value).`, `Draw(all opponents, Pages).`).
    IR: `EffectIR.draw`. Which `draw` runs: the host's (`BindOptions.draw`), else
    the one the game registered for its engine (`setEngineDraw` — a document is
    compiled once and played on many engines, so it asks the engine it runs on),

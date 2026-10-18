@@ -2,7 +2,7 @@
  * The editor's glossary — the definition sources a **document** can explain.
  *
  * In the game a word means what the content says it means. In the editor the
- * document being typed is itself a source of meaning: a `Buff Frailty (stacks)`
+ * document being typed is itself a source of meaning: a `Buff Frailty`
  * line declares something the sentences below it refer to, and the author
  * should be able to select `Frailty` and see what they declared. That is a
  * source, not a special case, which is why it lives here rather than in the
@@ -30,7 +30,7 @@ export interface DeclaredBuff {
   readonly name: string;
   readonly start: number;
   readonly end: number;
-  /** The `(stacks)`, `(weight 3)` options as written. */
+  /** Legacy parenthesised options as written (the language no longer has any). */
   readonly options: string;
 }
 

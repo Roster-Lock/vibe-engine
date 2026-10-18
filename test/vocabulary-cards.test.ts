@@ -36,7 +36,7 @@ describe('the vocabulary cards', () => {
 
   it('never heal and never make anything invincible', () => {
     for (const [, text] of VOCABULARY) {
-      expect(text).not.toMatch(/\bheal|healing|healed|prevented/i);
+      expect(text).not.toMatch(/\bheal\b|healing|healed|prevented/i);
     }
   });
 

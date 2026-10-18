@@ -30,7 +30,7 @@ import {
 import { ZoneDictionary } from '../src/english/zone-dictionary.js';
 import { compileCardDocument } from '../src/english/index.js';
 
-const rage = buff({ name: 'Rage', description: '+3 power', weight: 5, stacks: true });
+const rage = buff({ name: 'Rage', description: '+3 power', weight: 5 });
 
 const buffs = new BuffDictionary([{ name: 'Rage', def: rage }]);
 
@@ -84,7 +84,7 @@ describe('the glossary — resolving a term', () => {
     const term = glossary().resolveText('rage');
     expect(term?.ref.kind).toBe('buff');
     expect(term?.summary).toBe('+3 power');
-    expect(term?.facts).toContainEqual({ label: 'Stacks', value: 'yes' });
+    expect(term?.facts).toContainEqual({ label: 'Weight', value: '5' });
   });
 
   it('resolves a zone the game declared, and the engine’s own zones', () => {
@@ -225,7 +225,7 @@ describe('the glossary — a newly registered keyword', () => {
 describe('the glossary — finding terms in text', () => {
   it('annotates a card’s rules text, keyword included', () => {
     const compiled = compileCardDocument(
-      ['Card Shieldbearer', 'Cost 2', 'Creature 1/4', 'Taunt.'].join('\n'),
+      ['Card Shieldbearer', '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 1, "health": 4 } }', 'Taunt.'].join('\n'),
     );
     const card = compiled.cards[0]!;
     const marked = glossary().annotate(card.rulesText);
@@ -247,7 +247,7 @@ describe('the glossary — finding terms in text', () => {
       { name: 'Rage', def: rage },
       { name: 'Rage of the Ancients', def: buff({ name: 'Rage of the Ancients', weight: 1 }) },
     ]);
-    const marked = glossary({ buffs: dictionary }).annotate('Add Rage of the Ancients to this character.');
+    const marked = glossary({ buffs: dictionary }).annotate('Add Rage of the Ancients to this.');
     expect(marked.spans.map((span) => span.name)).toContain('Rage of the Ancients');
     expect(marked.spans.map((span) => span.name)).not.toContain('Rage');
   });
@@ -279,7 +279,7 @@ describe('the glossary — finding terms in text', () => {
     const dictionary = new BuffDictionary([
       { name: 'Toxic Tentacles', def: buff({ name: 'Toxic Tentacles', weight: 1 }) },
     ]);
-    expect(found(glossary({ buffs: dictionary }), 'Add Toxic Tentacles to this character.')).toContain(
+    expect(found(glossary({ buffs: dictionary }), 'Add Toxic Tentacles to this.')).toContain(
       'Toxic Tentacles',
     );
   });
@@ -316,7 +316,7 @@ describe('the glossary — finding terms in text', () => {
   });
 
   it('is total — every span is a slice of the text that was passed', () => {
-    const text = 'When this takes damage then Deal 2 damage to all enemy characters.';
+    const text = 'When this is damaged then Deal 2 damage to all enemy characters.';
     const marked = glossary().annotate(text);
     for (const span of marked.spans) {
       expect(text.slice(span.start, span.end).length).toBeGreaterThan(0);

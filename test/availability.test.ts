@@ -34,7 +34,8 @@ class Idle extends Player {
 
 /** A unit whose Counterstrike is live only while it is Charged. */
 const DOCUMENT = `
-  Buff Charged (until end of turn)
+  Buff Charged
+  Fading 0.
 
   Ability Counterstrike
   Available while this has Charged.

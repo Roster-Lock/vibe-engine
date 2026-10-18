@@ -3,9 +3,9 @@
  * software (docs/design/20-secret-choices-and-dice.md):
  *
  * ```
- * Each player commits a card from their hand face down.
+ * All players commit a card from their hand face down.
  * When they are ready, reveal.
- * Each player puts the card they committed into their garbage.
+ * All players move the card they committed to their garbage.
  * ```
  *
  * **Commit** is sealed and simultaneous; **choose** is open and in turn order.
@@ -28,9 +28,9 @@ const ZONES = new ZoneDictionary([HAND.id]);
 const lower = (text: string) => lowerDocument(parseDocument(text, { zones: ZONES }).doc);
 
 const FULL = `Ability Showdown
-Each player commits a card from their hand face down.
+All players commit a card from their hand face down.
 When they are ready, reveal.
-Each player puts the card they committed into their garbage.`;
+All players move the card they committed to their garbage.`;
 
 describe('choice rounds — parsing', () => {
   it('parses the three sentences to the IR nodes', () => {
@@ -43,7 +43,7 @@ describe('choice rounds — parsing', () => {
   });
 
   it('parses a number choice, open or secret', () => {
-    const [ability] = lower('Ability Pick\nEach player commits a number from 1 to 6 face down.\nWhen they are ready, reveal.').abilities;
+    const [ability] = lower('Ability Pick\nAll players commit a number from 1 to 6 face down.\nWhen they are ready, reveal.').abilities;
     expect(ability!.steps[0]!.effects[0]).toEqual({
       kind: 'choose',
       round: 'choice',
@@ -51,17 +51,17 @@ describe('choice rounds — parsing', () => {
       secret: true,
       pick: { kind: 'number', min: { kind: 'const', value: 1 }, max: { kind: 'const', value: 6 } },
     });
-    const open = lower('Ability Pick\nEach player chooses a number from 1 to 6.').abilities[0]!;
+    const open = lower('Ability Pick\nStarting with you, each player chooses a number from 1 to 6.').abilities[0]!;
     expect(open.steps[0]!.effects[0]).toMatchObject({ secret: false });
   });
 
   it('understands you, each opponent, and the "all players" spelling of the reveal', () => {
     const doc = lower(`Ability Mixed
-Each opponent commits a card from their hand face down.
+All opponents commit a card from their hand face down.
 When all players are ready, reveal.
-Each opponent puts the card they committed into their garbage.
+All opponents move the card they committed to their garbage.
 You choose a card from your hand.
-You put the card you chose into your garbage.`);
+You move the card you chose to your garbage.`);
     const effects = doc.abilities[0]!.steps.map((step) => step.effects[0]);
     expect(effects.map((effect) => effect!.kind)).toEqual(['choose', 'reveal', 'moveChosen', 'choose', 'moveChosen']);
     expect(effects[0]).toMatchObject({ players: 'opponents' });
@@ -71,7 +71,7 @@ You put the card you chose into your garbage.`);
   it('still reads "You win the game." and a real "when … then" trigger', () => {
     const doc = lower('Ability Win\nYou win the game.');
     expect(doc.abilities[0]!.steps[0]!.effects[0]).toEqual({ kind: 'result', players: 'you', win: true });
-    const trigger = parseDocument('when this character dies then Deal 1 damage to all enemy characters.').diagnostics;
+    const trigger = parseDocument('when this is destroyed then Deal 1 damage to all enemy characters.').diagnostics;
     expect(trigger.filter((d) => d.severity === 'error')).toEqual([]);
   });
 });
@@ -81,9 +81,9 @@ describe('choice rounds — rendering', () => {
     const ir = lower(FULL);
     const { text, gaps } = renderDocument(ir);
     expect(gaps).toEqual([]);
-    expect(text).toContain('Each player commits a card from their hand face down.');
+    expect(text).toContain('All players commit a card from their hand face down.');
     expect(text).toContain('When they are ready, reveal.');
-    expect(text).toContain('Each player puts the card they committed into their garbage.');
+    expect(text).toContain('All players move the card they committed to their garbage.');
     const again = lower(text);
     expect(again.abilities[0]!.steps).toEqual(ir.abilities[0]!.steps);
     // and rendering is a fixpoint
@@ -93,26 +93,26 @@ describe('choice rounds — rendering', () => {
   it('words the move by the verb that opened the round, whichever was written', () => {
     const text = renderDocument(
       lower(`Ability Mismatch
-Each player commits a card from their hand face down.
+All players commit a card from their hand face down.
 When they are ready, reveal.
-Each player puts the card they chose into their garbage.`),
+All players move the card they chose to their garbage.`),
     ).text;
-    expect(text).toContain('Each player puts the card they committed into their garbage.');
+    expect(text).toContain('All players move the card they committed to their garbage.');
   });
 
   it('words "you" and "each opponent" correctly', () => {
     const text = renderDocument(
       lower(`Ability Mixed
-Each opponent commits a card from their hand face down.
+All opponents commit a card from their hand face down.
 When they are ready, reveal.
-Each opponent puts the card they committed into their garbage.
+All opponents move the card they committed to their garbage.
 You choose a card from your hand.
-You put the card you chose into your garbage.`),
+You move the card you chose to your garbage.`),
     ).text;
-    expect(text).toContain('Each opponent commits a card from their hand face down.');
-    expect(text).toContain('Each opponent puts the card they committed into their garbage.');
+    expect(text).toContain('All opponents commit a card from their hand face down.');
+    expect(text).toContain('All opponents move the card they committed to their garbage.');
     expect(text).toContain('You choose a card from your hand.');
-    expect(text).toContain('You put the card you chose into your garbage.');
+    expect(text).toContain('You move the card you chose to your garbage.');
   });
 });
 
@@ -125,21 +125,21 @@ describe('choice rounds — diagnostics', () => {
   });
 
   it('a secret choice that is never revealed', () => {
-    expect(errors('Ability A\nEach player commits a card from their hand face down.')[0]).toMatch(
+    expect(errors('Ability A\nAll players commit a card from their hand face down.')[0]).toMatch(
       /never revealed.*When they are ready, reveal\./,
     );
   });
 
   it('using a choice before it is revealed points at that sentence', () => {
-    const text = 'Ability A\nEach player commits a card from their hand face down.\nEach player puts the card they committed into their garbage.\nWhen they are ready, reveal.';
+    const text = 'Ability A\nAll players commit a card from their hand face down.\nAll players move the card they committed to their garbage.\nWhen they are ready, reveal.';
     const found = compileDocument(text, { zones: ZONES }).diagnostics.find((d) => d.code === 'choice-round' && /before it is revealed/.test(d.message));
     expect(found).toBeDefined();
-    expect(text.slice(found!.start, found!.end)).toBe('Each player puts the card they committed into their garbage.');
+    expect(text.slice(found!.start, found!.end)).toBe('All players move the card they committed to their garbage.');
   });
 
   it('a reveal with nothing chosen, and a reveal of an open choice', () => {
     expect(errors('Ability A\nWhen they are ready, reveal.')[0]).toMatch(/nothing has been chosen/);
-    expect(errors('Ability A\nEach player chooses a card from their hand.\nWhen they are ready, reveal.')[0]).toMatch(/Use "commits … face down"/);
+    expect(errors('Ability A\nStarting with you, each player chooses a card from their hand.\nWhen they are ready, reveal.')[0]).toMatch(/Use "commits … face down"/);
   });
 
   it('warns about a secret choice with one chooser', () => {
@@ -151,28 +151,28 @@ describe('choice rounds — diagnostics', () => {
   });
 
   it('rejects an unknown zone, a backwards range, and a bad verb with a helpful message', () => {
-    expect(errors('Ability A\nEach player chooses a card from their pocket.')[0]).toMatch(/unknown zone "pocket"/);
-    expect(errors('Ability A\nEach player chooses a number from 6 to 1.')[0]).toMatch(/not a range of whole numbers/);
-    expect(errors('Ability A\nEach player picks a card from their hand.')[0]).toMatch(/expected "commits" \(sealed\) or "chooses" \(open\)/);
-    expect(errors('Ability A\nEach cat commits a card from their hand face down.')[0]).toMatch(/"Each" is followed by "player" or "opponent"/);
+    expect(errors('Ability A\nStarting with you, each player chooses a card from their pocket.')[0]).toMatch(/unknown zone "pocket"/);
+    expect(errors('Ability A\nStarting with you, each player chooses a number from 6 to 1.')[0]).toMatch(/not a range of whole numbers/);
+    expect(errors('Ability A\nAll players pick a card from their hand.')[0]).toMatch(/expected "win", "lose", "choose"/);
+    expect(errors('Ability A\nAll cats commit a card from their hand face down.')[0]).toBeDefined();
   });
 
   it('a commitment must say "face down", and a choice must not', () => {
-    expect(errors('Ability A\nEach player commits a card from their hand.')[0]).toMatch(/add "face down"/);
-    expect(errors('Ability A\nEach player chooses a card from their hand face down.')[0]).toMatch(
-      /"chooses" is made in the open/,
+    expect(errors('Ability A\nAll players commit a card from their hand.')[0]).toMatch(/add "face down"/);
+    expect(errors('Ability A\nStarting with you, each player chooses a card from their hand face down.')[0]).toMatch(
+      /"choose" is made in the open/,
     );
   });
 
   it('names the old "in secret" spelling instead of reporting a stray word', () => {
-    expect(errors('Ability A\nEach player chooses a card from their hand in secret.')[0]).toMatch(
-      /not yet a commitment — write "commits … face down"/,
+    expect(errors('Ability A\nStarting with you, each player chooses a card from their hand in secret.')[0]).toMatch(
+      /not yet a commitment — write "commit … face down"/,
     );
   });
 
   it('still reads "in" for the zone, since it means the same as "from"', () => {
     expect(
-      lower('Ability A\nEach player commits a card in their hand face down.\nWhen they are ready, reveal.').abilities[0]!
+      lower('Ability A\nAll players commit a card in their hand face down.\nWhen they are ready, reveal.').abilities[0]!
         .steps[0]!.effects[0],
     ).toMatchObject({ kind: 'choose', pick: { kind: 'card', from: 'hand' } });
   });

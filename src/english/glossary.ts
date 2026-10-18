@@ -468,6 +468,22 @@ export const BUILTIN_KEYWORDS: readonly KeywordDef[] = [
     details: '`Charge.` — this creature may attack the turn it lands. Creatures only.',
     cardKinds: ['creature'],
   },
+  {
+    name: 'Weight',
+    summary: 'A buff keyword: where the buff sorts among other statuses.',
+    details: '`Weight 2.` — under a buff. Its status sort weight (defaults to 1); a higher weight sorts later.',
+    cardKinds: [],
+    handled: false,
+  },
+  {
+    name: 'Fading',
+    summary: 'A buff keyword: it starts with counters, and each turn end removes one.',
+    details:
+      '`Fading 2.` — under a buff. Each instance starts with that many counters; every turn end removes one, and an instance that cannot remove one is destroyed. `Fading 0.` ends at the first turn end; `Fading 1.` waits a full turn first.',
+    // A buff keyword, not a card line: no card kind may carry it.
+    cardKinds: [],
+    handled: false,
+  },
 ];
 
 /** A registry with every built-in keyword registered. */
@@ -987,7 +1003,6 @@ function firstLine(markdown: string): string {
 
 function buffFacts(def: BuffDef): TermFact[] {
   const facts: TermFact[] = [{ label: 'Weight', value: String(def.weight) }];
-  if (def.stacks) facts.push({ label: 'Stacks', value: 'yes' });
   if (def.removable === false) facts.push({ label: 'Removable', value: 'no' });
   if (def.removedOnDefeat === false) facts.push({ label: 'Survives its wearer', value: 'yes' });
   return facts;

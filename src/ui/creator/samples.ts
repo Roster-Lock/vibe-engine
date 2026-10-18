@@ -25,10 +25,10 @@ Destroy target enemy character.
   },
   {
     title: 'Sacrifice',
-    doc: `# Several sentences run in order. "this character" is the user;
+    doc: `# Several sentences run in order. "this" is the user;
 # "all other ally characters" skips the user.
 Ability Sacrifice
-Destroy this character.
+Destroy this.
 Heal all other ally characters for 25.
 `,
   },
@@ -39,8 +39,8 @@ Heal all other ally characters for 25.
 Ability Venom Strike
 Add Poison to target enemy character.
 
-Buff Poison (stacks)
-When the turn starts, deal 10 damage to this character.
+Buff Poison
+When a turn starts then deal 10 damage to this.
 `,
   },
   {
@@ -52,7 +52,7 @@ Ability Soul Rot
 Add Frailty to target enemy character.
 Deal 5 damage to all enemy characters.
 
-Buff Frailty (stacks)
+Buff Frailty
 `,
   },
   {
@@ -73,7 +73,7 @@ Ability Plague
 Add Poison to all enemy characters.
 Destroy all enemy characters with poison.
 
-Buff Poison (stacks)
+Buff Poison
 `,
   },
   {
@@ -83,7 +83,7 @@ Buff Poison (stacks)
 Ability Tentacle Sweep
 Add Toxic Tentacles to target enemy character.
 
-Buff Toxic Tentacles (stacks)
+Buff Toxic Tentacles
 `,
   },
   {
@@ -94,7 +94,7 @@ Buff Toxic Tentacles (stacks)
 Ability Field Medicine
 Heal all ally characters with poison or hp < 10 for 25.
 
-Buff Poison (stacks)
+Buff Poison
 `,
   },
   {

@@ -38,6 +38,13 @@ export function votesOptionOfPath(value: MathExpression): string | undefined {
   return typeof option === 'string' ? option : undefined;
 }
 
+/** `highest` / `lowest` when an amount is exactly `the highest vote` / `the lowest vote` (the path `vote.<stat>`). */
+export function voteStatOfPath(value: MathExpression): 'highest' | 'lowest' | undefined {
+  if (value.kind !== 'path' || value.parts.length !== 2 || value.parts[0] !== 'vote') return undefined;
+  const stat = value.parts[1];
+  return stat === 'highest' || stat === 'lowest' ? stat : undefined;
+}
+
 /** The name when an amount is exactly a stored variable: a bare word the language does not own. */
 export function variableNameOfPath(value: MathExpression): string | undefined {
   if (value.kind !== 'path' || value.parts.length !== 1) return undefined;
@@ -51,6 +58,8 @@ function amountToString(value: MathExpression): string {
   if (stat) return rollPhrase(stat);
   const votes = votesOptionOfPath(value);
   if (votes !== undefined) return votesPhrase(votes);
+  const voteStat = voteStatOfPath(value);
+  if (voteStat !== undefined) return `the ${voteStat} vote`;
   return variableNameOfPath(value) ?? `(${mathToSource(value)})`;
 }
 
@@ -59,12 +68,11 @@ export function charsToString(chars: CharsPhrase): string {
   const parts: string[] = [];
   switch (chars.quantifier) {
     case 'source':
-      return `the source ${chars.sourceType ?? 'character'}`;
+      return 'the source';
     case 'bound':
       return `the ${chars.name ?? '?'}`;
     case 'this':
-      // Read back the way it was written: bare `this`, or `this character`.
-      return chars.withClause ? `this with ${conditionToString(chars.withClause.expression)}` : chars.bare ? 'this' : 'this character';
+      return chars.withClause ? `this with ${conditionToString(chars.withClause.expression)}` : 'this';
     case 'target':
       parts.push('target');
       break;
@@ -171,11 +179,7 @@ export function availableSummary(clause: IfClause): string {
 /** An `If …,` clause as English. */
 export function guardSummary(guard: IfClause): string {
   if (guard.kind === 'value') {
-    const test =
-      guard.test.kind === 'range'
-        ? guard.test.text
-        : `${guard.test.op === '>' ? 'higher than' : guard.test.op === '<' ? 'lower than' : 'the same as'} ${amountToString(guard.test.other)}`;
-    return `If ${amountToString(guard.value)} is ${test}, `;
+    return `If ${guard.comparisons.map((c) => `${amountToString(c.value)} ${c.op} ${amountToString(c.other)}`).join(' and ')}, `;
   }
   if (guard.kind === 'count') {
     return `If there are ${guard.count.text} ${charsToString({ ...guard.subject, quantifier: 'all' }).replace(/^all (other )?/, '$1')}, `;
@@ -288,7 +292,7 @@ function bareEffectSummary(sentence: Sentence): string {
 /** A short description of how the ability picks its target (preview pane). */
 export function targetingSummary(ability: ManualAbility): string {
   if (ability.targeting.who === 'self') {
-    return 'No target to pick — this character fires, and its "all …" phrases resolve by themselves.';
+    return 'No target to pick — the user fires, and its "all …" phrases resolve by themselves.';
   }
   const side = ability.targeting.who === 'enemy' ? 'enemy' : ability.targeting.who === 'ally' ? 'ally' : 'character';
   return `The player picks 1 ${side} when the ability is used.`;
@@ -323,9 +327,9 @@ export function triggerSummary(trigger: TriggerSentence): string {
  */
 function verbOf(trigger: TriggerSentence): string {
   // A zone movement names its zone, not a table verb: "enters play from
-  // active" / "leaves play". Plural for a batch, singular for one event.
+  // active" / "leaves play". One form, whether for a batch or one event.
   if (trigger.zone) {
-    const verb = trigger.zone.verb === 'enters' ? (trigger.mode === 'single' ? 'enters' : 'enter') : trigger.mode === 'single' ? 'leaves' : 'leave';
+    const verb = trigger.zone.verb;
     const preposition = trigger.zone.verb === 'enters' ? 'from' : 'to';
     return `${verb} ${trigger.zone.id}${trigger.zone.opposite !== undefined ? ` ${preposition} ${trigger.zone.opposite}` : ''}`;
   }

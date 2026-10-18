@@ -270,7 +270,7 @@ export function CreatePage({ onBack }: { onBack: () => void }) {
             )}
             {result.buffs.length > 0 && (
               <p className="buff-decls">
-                Buffs: {result.buffs.map((b) => `${b.name}${b.stacks ? ' (stacks)' : ''} (weight ${b.weight})`).join(', ')}
+                Buffs: {result.buffs.map((b) => `${b.name} (weight ${b.weight})`).join(', ')}
               </p>
             )}
           </section>

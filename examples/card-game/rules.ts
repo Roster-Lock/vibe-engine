@@ -11,10 +11,10 @@
  * revealed card add a rule without reaching into the game loop:
  *
  * ```ts
- * // "At the start of your turn, draw an extra card."
+ * // "When your turn starts then draw an extra card."
  * game.rules.add({
  *   id: 'inspiration',
- *   name: 'At the start of your turn, draw an extra card.',
+ *   name: 'When your turn starts then draw an extra card.',
  *   at: 'turn:start',
  *   affects: 'turn-owner',
  *   actions: [{ kind: 'draw', count: 1 }],
@@ -53,21 +53,21 @@ export type CardRule = GameRule<CardRuleAction>;
 export const CARD_RULES: readonly CardRule[] = [
   {
     id: 'crystal',
-    name: 'At the start of your turn, you gain a mana crystal (up to ten).',
+    name: 'When your turn starts then you gain a mana crystal (up to ten).',
     at: 'turn:start',
     affects: 'turn-owner',
     actions: [{ kind: 'gain-crystal' }],
   },
   {
     id: 'refill',
-    name: 'At the start of your turn, your mana refills.',
+    name: 'When your turn starts then your mana refills.',
     at: 'turn:start',
     affects: 'turn-owner',
     actions: [{ kind: 'refill-mana' }],
   },
   {
     id: 'wake',
-    name: 'At the start of your turn, your creatures wake up.',
+    name: 'When your turn starts then your creatures wake up.',
     at: 'turn:start',
     affects: 'turn-owner',
     actions: [{ kind: 'wake-creatures' }],

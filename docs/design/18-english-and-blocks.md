@@ -157,7 +157,7 @@ owned by … with …`), every predicate (`compare`, `and`, `or`, `not`,
 `3 or less`), `If …,` guards (all three readings), `You may …`, every `Repeat …`
 clause combination, named `Target … as …` bindings, `Available while …`,
 `when … then …` triggers in both scopes, all modifier forms, buff options
-(`stacks`, `weight`, `for n turns`, `until end of turn`) and `import`.
+(`weight`, the `Fading` keyword) and `import`.
 
 What the round trip does **not** reproduce, exhaustively:
 

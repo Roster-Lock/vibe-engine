@@ -98,7 +98,7 @@ describe('the meter', () => {
 
 /* ------------------------------ in the engine ----------------------------- */
 
-const ECHO = (name: string) => `Buff ${name}\nwhen this takes damage then deal 1 damage to this character.`;
+const ECHO = (name: string) => `Buff ${name}\nwhen this is damaged then deal 1 damage to this.`;
 
 function arena(options: Parameters<typeof createEngine>[0] = {}) {
   const events: GameEvent[] = [];
@@ -137,12 +137,12 @@ describe('loops the depth cap does not catch', () => {
     await engine.addBuff(hero, compileDocument(ECHO('Echo')).buffs[0]!);
     const error = await engine.damage(hero.gauge('hp'), 1).catch((e: unknown) => e);
     // The trail shows the cycle itself: an effect, an action, then the same trigger again.
-    expect((error as Error).message).toMatch(/trigger:When this takes damage, deal 1 damage to this character\..*trigger:When this takes damage/);
+    expect((error as Error).message).toMatch(/trigger:When this is damaged, deal 1 damage to this\..*trigger:When this is damaged/);
   });
 
   it('a repeat that cannot reach its end is stopped', async () => {
     const compiled = compileDocument(
-      'Ability Spin\nRoll a d6.\nRepeat up to 900 times while that total is 3 or less: Roll a d6.',
+      'Ability Spin\nRoll a d6.\nRepeat up to 900 times while that value <= 3: Roll a d6.',
     );
     expect(compiled.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     const ability = compiled.abilities[0]!;
@@ -154,7 +154,7 @@ describe('loops the depth cap does not catch', () => {
   });
 
   it('a formula that sums a million terms is stopped inside the sum', async () => {
-    const compiled = compileDocument('Ability Big\nDeal (Σ(i = 1 to 1000000, i)) damage to this character.');
+    const compiled = compileDocument('Ability Big\nDeal (Σ(i = 1 to 1000000, i)) damage to this.');
     expect(compiled.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     const ability = compiled.abilities[0]!;
     const { engine } = arena();
@@ -166,7 +166,7 @@ describe('loops the depth cap does not catch', () => {
   });
 
   it('lets a legitimate formula through', async () => {
-    const compiled = compileDocument('Ability Small\nDeal (Σ(i = 1 to 20, i)) damage to this character.');
+    const compiled = compileDocument('Ability Small\nDeal (Σ(i = 1 to 20, i)) damage to this.');
     const ability = compiled.abilities[0]!;
     const { engine } = arena();
     const caster = new Character('Caster', { gauges: [{ id: 'hp', max: 500 }], skills: [{ name: 'Small', weight: 1, abilities: [ability] }] });
@@ -220,7 +220,7 @@ describe('budgets in the engine', () => {
 describe('a game stuck in a loop it cannot leave is a draw', () => {
   it('ends the match with no winner and says why', async () => {
     const { cards } = playableCards(
-      ['Card Test Abyss', 'Cost 0', 'Spell', 'Deal (Σ(i = 1 to 1000000, i)) damage to all enemy characters.'].join('\n'),
+      ['Card Test Abyss', '{ "cost": 0, "type": "spell" }', 'Deal (Σ(i = 1 to 1000000, i)) damage to all enemy characters.'].join('\n'),
     );
     const abyss = cards[0]! as Card;
     const events: GameEvent[] = [];
@@ -253,28 +253,28 @@ describe('the compiler warns about the loop before it runs', () => {
     compileDocument(text).diagnostics.filter((d) => d.severity === 'warning' && d.code === 'trigger-loop');
 
   it('a trigger on this taking damage that deals damage to this', () => {
-    const found = warnings('Buff Echo\nwhen this takes damage then deal 1 damage to this character.');
+    const found = warnings('Buff Echo\nwhen this is damaged then deal 1 damage to this.');
     expect(found).toHaveLength(1);
-    expect(found[0]!.message).toMatch(/sets itself off again every time it runs.*Aim it at "the source character"/);
+    expect(found[0]!.message).toMatch(/sets itself off again every time it runs.*Aim it at "the source"/);
   });
 
   it('also when it deals damage to everyone, which includes this', () => {
-    expect(warnings('Buff Echo\nwhen this takes damage then deal 1 damage to all characters.')).toHaveLength(1);
+    expect(warnings('Buff Echo\nwhen this is damaged then deal 1 damage to all characters.')).toHaveLength(1);
   });
 
   it('and the same for healing', () => {
-    expect(warnings('Buff Echo\nwhen this is healed then heal this character for 1.')).toHaveLength(1);
+    expect(warnings('Buff Echo\nwhen this is healed then heal this for 1.')).toHaveLength(1);
   });
 
   it('is quiet about the real thing it should not mind: thorns, other targets, other directions', () => {
-    expect(warnings('Buff Thorns\nwhen this takes damage then deal 3 damage to the source character.')).toEqual([]);
-    expect(warnings('Buff Aura\nwhen this takes damage then deal 1 damage to all enemy characters.')).toEqual([]);
-    expect(warnings('Buff Mend\nwhen this takes damage then heal this character for 1.')).toEqual([]);
-    expect(warnings('Buff Pain\nwhen this is healed then deal 1 damage to this character.')).toEqual([]);
+    expect(warnings('Buff Thorns\nwhen this is damaged then deal 3 damage to the source.')).toEqual([]);
+    expect(warnings('Buff Aura\nwhen this is damaged then deal 1 damage to all enemy characters.')).toEqual([]);
+    expect(warnings('Buff Mend\nwhen this is damaged then heal this for 1.')).toEqual([]);
+    expect(warnings('Buff Pain\nwhen this is healed then deal 1 damage to this.')).toEqual([]);
   });
 
   it('is only a warning: the document still compiles and runs, and gas is the backstop', async () => {
-    const compiled = compileDocument('Buff Echo\nwhen this takes damage then deal 1 damage to this character.');
+    const compiled = compileDocument('Buff Echo\nwhen this is damaged then deal 1 damage to this.');
     expect(compiled.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     expect(compiled.buffs).toHaveLength(1);
   });

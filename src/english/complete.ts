@@ -10,6 +10,7 @@ import {
   CHAR_WORDS,
   EVENT_PHRASES,
   RESULT_VERBS,
+  GAUGE_WORDS,
   SENTENCE_STARTERS,
   WITH_OPERATORS,
   WORD_DOCS,
@@ -36,7 +37,21 @@ export function completeAt(
   offset: number,
   dictionary: BuffDictionary = emptyDictionary(),
   zones: ZoneDictionary = emptyZoneDictionary(),
+  gauges: readonly string[] = GAUGE_WORDS,
 ): Suggestion[] {
+  const previous = activeGauges;
+  activeGauges = gauges;
+  try {
+    return completeWithin(text, offset, dictionary, zones);
+  } finally {
+    activeGauges = previous;
+  }
+}
+
+/** The game's gauge words for the completion in progress (set by `completeAt`). */
+let activeGauges: readonly string[] = GAUGE_WORDS;
+
+function completeWithin(text: string, offset: number, dictionary: BuffDictionary, zones: ZoneDictionary): Suggestion[] {
   const prefixText = text.slice(0, offset);
   const lexed = lex(prefixText);
   const tokens = lexed[lexed.length - 1]?.kind === 'eof' ? lexed.slice(0, -1) : lexed;
@@ -73,11 +88,8 @@ export function completeAt(
   }
 
   // Typing inside a heading's name (still on the heading's line): names are
-  // free text — offer nothing (buff options inside parens are the exception).
+  // free text — offer nothing.
   if (boundaryToken && boundaryToken.kind === 'word' && boundaryToken.line === cursorLine) {
-    if (boundaryToken.lower === 'buff' && insideParens(walk, boundaryIndex)) {
-      return wordsToSuggestions(['stacks', 'weight'], typedPrefix);
-    }
     return [];
   }
 
@@ -174,7 +186,7 @@ function expectationsFor(tokens: Token[], _dictionary: BuffDictionary, zones: Zo
 /* ------------------------------ triggers ------------------------------- */
 
 /** The zone verbs, which name a zone rather than an event. */
-const ZONE_VERBS = ['enters', 'enter', 'leaves', 'leave'] as const;
+const ZONE_VERBS = ['enters', 'leaves'] as const;
 
 /** The words that can end a trigger's subject and start its event verb. */
 function isEventVerbWord(word: string | undefined): boolean {
@@ -412,7 +424,7 @@ function walkPostCharword(tokens: Token[], i: number, continuations: string[], q
       case 'the':
         return { kind: 'words', words: ['opponent'] };
       case 'condition':
-        return { kind: 'wordsAndBuffs', words: ['hp', 'mana'] };
+        return { kind: 'wordsAndBuffs', words: [...activeGauges] };
       case 'gaugeOp':
         return { kind: 'words', words: [...WITH_OPERATORS] };
       case 'number':
@@ -469,7 +481,7 @@ function walkPostCharword(tokens: Token[], i: number, continuations: string[], q
         return { kind: 'words', words: ['opponent'] };
       case 'condition': {
         const lower = t.kind === 'word' ? t.lower : '';
-        if (lower === 'hp' || lower === 'mana') {
+        if (activeGauges.includes(lower)) {
           i += 1;
           phase = 'gaugeOp';
           break;
@@ -485,7 +497,7 @@ function walkPostCharword(tokens: Token[], i: number, continuations: string[], q
           phase = 'andOrTail';
           break;
         }
-        return { kind: 'wordsAndBuffs', words: ['hp', 'mana'] };
+        return { kind: 'wordsAndBuffs', words: [...activeGauges] };
       }
       case 'gaugeOp':
         if (t.kind === 'punct' && (t.text === '<' || t.text === '>' || t.text === '=')) {

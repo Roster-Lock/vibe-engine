@@ -1,6 +1,6 @@
 /**
  * **Choice rounds in the IR** — "each player commits a card face down; when
- * everyone is ready, reveal; each player puts the card they committed into their
+ * everyone is ready, reveal; each player moves the card they committed to their
  * garbage" (docs/design/20-secret-choices-and-dice.md).
  *
  * `test/sealed-round.test.ts` holds the engine round to account. This file is

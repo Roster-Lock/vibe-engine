@@ -34,8 +34,8 @@ class Card implements Entity {
 }
 
 const OPEN_PRESENT = `Ability Open Present
-Reveal this card.
-Cast this card if you can, otherwise move it to its owner's garbage.`;
+Reveal this.
+Cast this if you can, otherwise move it to its owner's garbage.`;
 
 /** Three seats; Ann owns two wrapped presents in her `boxed` zone. */
 async function table(options: { castable?: boolean } = {}) {
@@ -226,7 +226,7 @@ describe('"this card" in the language', () => {
       { kind: 'revealCard' },
       { kind: 'castCard', otherwise: 'garbage' },
     ]);
-    expect(lower('Ability A\nCast this card if you can.\nMove this card to its owner\'s garbage.').abilities[0]!.steps.map((s) => s.effects[0])).toEqual([
+    expect(lower('Ability A\nCast this if you can.\nMove this to its owner\'s garbage.').abilities[0]!.steps.map((s) => s.effects[0])).toEqual([
       { kind: 'castCard' },
       { kind: 'moveCard', to: 'garbage' },
     ]);
@@ -234,10 +234,10 @@ describe('"this card" in the language', () => {
 
   it('renders each back as written and round-trips', () => {
     const source = `Ability Wrapped
-Reveal this card.
-Cast this card if you can.
-Cast this card if you can, otherwise move it to its owner's garbage.
-Move this card to its owner's garbage.`;
+Reveal this.
+Cast this if you can.
+Cast this if you can, otherwise move it to its owner's garbage.
+Move this to its owner's garbage.`;
     const ir = lower(source);
     const { text, gaps } = renderDocument(ir);
     expect(gaps).toEqual([]);
@@ -246,15 +246,15 @@ Move this card to its owner's garbage.`;
   });
 
   it('explains what each sentence expects', () => {
-    expect(errors('Ability A\nReveal that card.')[0]).toMatch(/acts on the card an ability belongs to — write "this card"/);
-    expect(errors('Ability A\nCast this card.')[0]).toMatch(/write "if you can"/);
-    expect(errors('Ability A\nCast this card if you can, otherwise discard it.')[0]).toMatch(/otherwise move it to its owner's <zone>/);
-    expect(errors('Ability A\nMove this card to its garbage.')[0]).toMatch(/expected "its owner's <zone>"/);
-    expect(errors("Ability A\nMove this card to its owner's pocket.")[0]).toMatch(/unknown zone "pocket"/);
+    expect(errors('Ability A\nReveal that card.')[0]).toMatch(/acts on the card an ability belongs to — write "this"/);
+    expect(errors('Ability A\nCast this.')[0]).toMatch(/write "if you can"/);
+    expect(errors('Ability A\nCast this if you can, otherwise discard it.')[0]).toMatch(/otherwise move it to its owner's <zone>/);
+    expect(errors('Ability A\nMove this to its garbage.')[0]).toMatch(/expected "its owner's <zone>"/);
+    expect(errors("Ability A\nMove this to its owner's pocket.")[0]).toMatch(/unknown zone "pocket"/);
   });
 
   it('is an error at run time in an ability a character carries, with a message that says why', async () => {
-    const compiled = compileDocument('Ability Peek\nReveal this card.');
+    const compiled = compileDocument('Ability Peek\nReveal this.');
     const ability = compiled.abilities[0]!;
     const hero = new Character('Hero', {
       gauges: [{ id: 'hp', max: 5 }],
@@ -262,7 +262,7 @@ Move this card to its owner's garbage.`;
     });
     const engine = createEngine({ seed: 's' });
     engine.registerCharacter(hero);
-    await expect(engine.useAbility(hero, ability, { targets: [] })).rejects.toThrow(/"this card" needs an ability a zone or an effect gave a card/);
+    await expect(engine.useAbility(hero, ability, { targets: [] })).rejects.toThrow(/"this" needs an ability a zone or an effect gave a card/);
   });
 });
 
@@ -272,18 +272,18 @@ describe('"Cards in … have …" — a zone gives its cards an ability, in the 
   const errors = (text: string) =>
     compileDocument(text, { zones: ZONES }).diagnostics.filter((d) => d.severity === 'error').map((d) => d.message);
 
-  const effectOf = (line: string) => lower(`Ability Open Present\nReveal this card.\n\nAbility Wrap\n${line}`).abilities[1]!.steps[0]!.effects[0];
+  const effectOf = (line: string) => lower(`Ability Open Present\nReveal this.\n\nAbility Wrap\n${line}`).abilities[1]!.steps[0]!.effects[0];
 
   it('says whose zone, which ability, and who may use it', () => {
-    expect(effectOf('Cards in your boxed zone have Open Present for each opponent.')).toEqual({
+    expect(effectOf('Cards in your boxed zone have Open Present for all opponents.')).toEqual({
       kind: 'zoneAbility',
       zone: 'boxed',
       owners: 'you',
       ability: 'open-present',
       users: 'opponents',
     });
-    expect(effectOf("Cards in each player's boxed zone have Open Present for you.")).toMatchObject({ owners: 'each', users: 'you' });
-    expect(effectOf("Cards in each opponent's boxed zone have Open Present for each player.")).toMatchObject({ owners: 'opponents', users: 'each' });
+    expect(effectOf("Cards in all players' boxed zone have Open Present for you.")).toMatchObject({ owners: 'each', users: 'you' });
+    expect(effectOf("Cards in all opponents' boxed zone have Open Present for all players.")).toMatchObject({ owners: 'opponents', users: 'each' });
     expect(effectOf('Cards in the boxed zone have Open Present for you.')).toMatchObject({ owners: 'shared' });
   });
 
@@ -294,12 +294,12 @@ describe('"Cards in … have …" — a zone gives its cards an ability, in the 
 
   it('round-trips, always writing the word "zone"', () => {
     const source = `Ability Open Present
-Reveal this card.
+Reveal this.
 
 Ability Wrap
-Cards in your boxed zone have Open Present for each opponent.
-Cards in each player's boxed zone have Open Present for you.
-Cards in the boxed zone have Open Present for each player.`;
+Cards in your boxed zone have Open Present for all opponents.
+Cards in all players' boxed zone have Open Present for you.
+Cards in the boxed zone have Open Present for all players.`;
     const ir = lower(source);
     const { text, gaps } = renderDocument(ir);
     expect(gaps).toEqual([]);
@@ -309,7 +309,7 @@ Cards in the boxed zone have Open Present for each player.`;
 
   it('finds an ability defined later in the document, and a name with several words', () => {
     expect(
-      errors(`Ability Wrap\nCards in your boxed zone have Open Present.\n\nAbility Open Present\nReveal this card.`),
+      errors(`Ability Wrap\nCards in your boxed zone have Open Present.\n\nAbility Open Present\nReveal this.`),
     ).toEqual([]);
   });
 
@@ -324,7 +324,7 @@ Cards in the boxed zone have Open Present for each player.`;
   }
 
   it('gives the cards of the caster\'s own zone the ability, for the players named', async () => {
-    const { engine, ann, bo, cy, gift, openPresent } = await wrapped('Cards in your boxed zone have Open Present for each opponent.');
+    const { engine, ann, bo, cy, gift, openPresent } = await wrapped('Cards in your boxed zone have Open Present for all opponents.');
     // "Each opponent" of Ann is Bo and Cy; Ann herself may not.
     expect([ann, bo, cy].map((p) => engine.abilitiesFor(p, gift))).toEqual([[], [openPresent], [openPresent]]);
   });
@@ -335,13 +335,13 @@ Cards in the boxed zone have Open Present for each player.`;
     expect(engine.abilitiesFor(bo, gift)).toEqual([]);
   });
 
-  it("each player's zone covers every player's, and your zone only the caster's", async () => {
-    const t = await wrapped("Cards in each player's boxed zone have Open Present for each player.");
+  it("all players' zone covers every player's, and your zone only the caster's", async () => {
+    const t = await wrapped("Cards in all players' boxed zone have Open Present for all players.");
     const theirs = new Card('Theirs');
     await t.engine.addEntity(theirs, 'boxed', { owner: t.cy });
     // Cards that arrive later are covered too.
     expect(t.engine.abilitiesFor(t.bo, theirs)).toEqual([t.openPresent]);
-    const own = await wrapped('Cards in your boxed zone have Open Present for each player.');
+    const own = await wrapped('Cards in your boxed zone have Open Present for all players.');
     const others = new Card('Others');
     await own.engine.addEntity(others, 'boxed', { owner: own.cy });
     expect(own.engine.abilitiesFor(own.bo, others)).toEqual([]);
@@ -349,7 +349,7 @@ Cards in the boxed zone have Open Present for each player.`;
 
   it('adds to what the zone gives, and giving it again changes who may use it', async () => {
     const compiled = compileDocument(
-      `${OPEN_PRESENT}\n\nAbility Peek\nReveal this card.\n\nAbility Wrap\nCards in your boxed zone have Open Present for you.\nCards in your boxed zone have Peek for you.\nCards in your boxed zone have Open Present for each opponent.`,
+      `${OPEN_PRESENT}\n\nAbility Peek\nReveal this.\n\nAbility Wrap\nCards in your boxed zone have Open Present for you.\nCards in your boxed zone have Peek for you.\nCards in your boxed zone have Open Present for all opponents.`,
       { zones: ZONES },
     );
     const [openPresent, peek, wrap] = compiled.abilities as [typeof compiled.abilities[number], typeof compiled.abilities[number], typeof compiled.abilities[number]];
@@ -384,12 +384,12 @@ Cards in the boxed zone have Open Present for each player.`;
   it('explains what each part expects', () => {
     const wrap = (line: string) => errors(`${OPEN_PRESENT}\n\nAbility Wrap\n${line}`)[0];
     expect(wrap('Cards have Open Present.')).toMatch(/write "Cards in <whose> <zone> have <ability>"/);
-    expect(wrap('Cards in boxed have Open Present.')).toMatch(/whose zone\? — "your", "each player's", "each opponent's" or "the"/);
+    expect(wrap('Cards in boxed have Open Present.')).toMatch(/whose zone\? — "your", "all players'", "all opponents'" or "the"/);
     expect(wrap('Cards in your pocket have Open Present.')).toMatch(/unknown zone "pocket"/);
     expect(wrap('Cards in your boxed zone Open Present.')).toMatch(/expected "have <ability>"/);
     expect(wrap('Cards in your boxed zone have.')).toMatch(/expected the name of an ability/);
-    expect(wrap('Cards in your boxed zone have Open Present for them.')).toMatch(/who may use it\? — "for you", "for each player" or "for each opponent"/);
-    expect(wrap('Cards in your boxed zone have Open Present for each cat.')).toMatch(/"each" is followed by "player" or "opponent"/);
+    expect(wrap('Cards in your boxed zone have Open Present for them.')).toMatch(/who may use it\? — "for you", "for all players" or "for all opponents"/);
+    expect(wrap('Cards in your boxed zone have Open Present for each cat.')).toMatch(/who may use it\? — "for you", "for all players" or "for all opponents"/);
   });
 
   it('fails clearly at run time when the zone does not exist in the game', async () => {
@@ -407,11 +407,11 @@ Cards in the boxed zone have Open Present for each player.`;
 describe('a Zone section — "Cards in this zone have …"', () => {
   const ZONES = new ZoneDictionary(['boxed']);
   const DOC = `Ability Open Present
-Reveal this card.
-Cast this card if you can, otherwise move it to its owner's garbage.
+Reveal this.
+Cast this if you can, otherwise move it to its owner's garbage.
 
 Zone boxed
-Cards in this zone have Open Present for each opponent.`;
+Cards in this zone have Open Present for all opponents.`;
   const errors = (text: string) =>
     compileDocument(text, { zones: ZONES }).diagnostics.filter((d) => d.severity === 'error').map((d) => d.message);
 
@@ -431,7 +431,7 @@ Cards in this zone have Open Present for each opponent.`;
     const ir = lowerDocument(parseDocument(DOC, { zones: ZONES }).doc);
     const { text, gaps } = renderDocument(ir);
     expect(gaps).toEqual([]);
-    expect(text).toContain('Zone boxed\nCards in this zone have Open Present for each opponent.');
+    expect(text).toContain('Zone boxed\nCards in this zone have Open Present for all opponents.');
     expect(lowerDocument(parseDocument(text, { zones: ZONES }).doc).zones).toEqual(ir.zones);
   });
 
@@ -466,7 +466,7 @@ Cards in this zone have Open Present for each opponent.`;
 
   it('uses the owner of a shared zone only for "each player"', async () => {
     const shared = new ZoneDictionary(['commons']);
-    const ok = compileDocument(`${OPEN_PRESENT}\n\nZone commons\nCards in this zone have Open Present for each player.`, { zones: shared });
+    const ok = compileDocument(`${OPEN_PRESENT}\n\nZone commons\nCards in this zone have Open Present for all players.`, { zones: shared });
     expect(ok.diagnostics.filter((d) => d.severity === 'error')).toEqual([]);
     const t = await table();
     t.engine.zones.declare({ id: 'commons', visibility: 'public' });
@@ -476,7 +476,7 @@ Cards in this zone have Open Present for each opponent.`;
     expect(t.engine.abilitiesFor(t.cy, card)).toEqual([ok.abilities[0]]);
 
     const bad = compileDocument(`${OPEN_PRESENT}\n\nZone commons\nCards in this zone have Open Present for you.`, { zones: shared });
-    await expect(bad.zones[0]!.apply(t.engine)).rejects.toThrow(/shared, so it has no owner — say "for each player"/);
+    await expect(bad.zones[0]!.apply(t.engine)).rejects.toThrow(/shared, so it has no owner — say "for all players"/);
   });
 
   it('fails clearly if the game has no such zone', async () => {
@@ -503,7 +503,7 @@ Cards in this zone have Open Present for each opponent.`;
   });
 
   it('holds only statements about its own zone', () => {
-    expect(errors(`${OPEN_PRESENT}\n\nZone boxed\nReveal this card.`)[0]).toMatch(/a Zone section is about its own zone/);
+    expect(errors(`${OPEN_PRESENT}\n\nZone boxed\nReveal this.`)[0]).toMatch(/a Zone section is about its own zone/);
     expect(errors(`${OPEN_PRESENT}\n\nZone boxed\nCards in your boxed zone have Open Present for you.`)[0]).toMatch(
       /a Zone section is about its own zone — write "Cards in this zone have/,
     );
@@ -541,7 +541,7 @@ describe('taking an ability away from a zone', () => {
   });
 
   it('keeps the zone\'s other abilities', async () => {
-    const compiled = compileDocument(`${OPEN_PRESENT}\n\nAbility Peek\nReveal this card.`);
+    const compiled = compileDocument(`${OPEN_PRESENT}\n\nAbility Peek\nReveal this.`);
     const [open, peek] = compiled.abilities as [typeof compiled.abilities[number], typeof compiled.abilities[number]];
     const { engine, ann, bo, gift } = await table();
     const zone = engine.zones.zone('boxed', ann)!;
@@ -562,11 +562,11 @@ describe('taking an ability away from a zone', () => {
 
   it('is a sentence, in both forms, and round-trips', () => {
     const source = `Ability Open Present
-Reveal this card.
+Reveal this.
 
 Ability Unwrap
 Cards in your boxed zone no longer have Open Present.
-Cards in each opponent's boxed zone no longer have Open Present.
+Cards in all opponents' boxed zone no longer have Open Present.
 
 Zone boxed
 Cards in this zone no longer have Open Present.`;
@@ -582,7 +582,7 @@ Cards in this zone no longer have Open Present.`;
     const { text, gaps } = renderDocument(ir);
     expect(gaps).toEqual([]);
     expect(text).toContain('Cards in your boxed zone no longer have Open Present.');
-    expect(text).toContain("Cards in each opponent's boxed zone no longer have Open Present.");
+    expect(text).toContain("Cards in all opponents' boxed zone no longer have Open Present.");
     expect(text).toContain('Zone boxed\nCards in this zone no longer have Open Present.');
     const again = lowerDocument(parseDocument(text, { zones: ZONES }).doc);
     expect(again.abilities[1]!.steps).toEqual(ir.abilities[1]!.steps);
@@ -591,7 +591,7 @@ Cards in this zone no longer have Open Present.`;
 
   it('run as an ability: gives, then takes away', async () => {
     const compiled = compileDocument(
-      `${OPEN_PRESENT}\n\nAbility Wrap\nCards in your boxed zone have Open Present for each opponent.\n\nAbility Unwrap\nCards in your boxed zone no longer have Open Present.`,
+      `${OPEN_PRESENT}\n\nAbility Wrap\nCards in your boxed zone have Open Present for all opponents.\n\nAbility Unwrap\nCards in your boxed zone no longer have Open Present.`,
       { zones: ZONES },
     );
     const [open, wrap, unwrap] = compiled.abilities as [typeof compiled.abilities[number], typeof compiled.abilities[number], typeof compiled.abilities[number]];

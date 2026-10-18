@@ -22,7 +22,7 @@ describe('buffs and skills', () => {
   });
 
   it('gives every status instance a unique uid (the per-instance id)', () => {
-    const def = buff({ name: 'Poison', weight: 1, stacks: true });
+    const def = buff({ name: 'Poison', weight: 1 });
     const a = new Buff(def);
     const b = new Buff(def);
     // Same kind id, different instance ids.
@@ -41,7 +41,7 @@ describe('buffs and skills', () => {
 
   it('removes by instance exactly that instance, not the first of its kind', () => {
     const hero = new Character('Hero', { maxHp: 100 });
-    const multi = buff({ name: 'Stacks', weight: 1, stacks: true });
+    const multi = buff({ name: 'Stacks', weight: 1 });
     const a = new Buff(multi);
     const b = new Buff(multi);
     hero.addBuff(a);
@@ -164,16 +164,12 @@ describe('buffs and skills', () => {
     expect(hero.statuses.map((s) => s.name)).toEqual(['Second', 'First']);
   });
 
-  it('rejects duplicate non-stackable buffs, allows stackable ones', () => {
+  it('every add of a buff is its own instance', () => {
     const hero = new Character('Hero', { maxHp: 100 });
-    const single = buff({ name: 'Unique', weight: 1 });
-    const multi = buff({ name: 'Stacks', weight: 1, stacks: true });
-    expect(hero.addBuff(new Buff(single))).toBe(true);
-    expect(hero.addBuff(new Buff(single))).toBe(false);
-    expect(hero.buffs.length).toBe(1);
+    const multi = buff({ name: 'Multi', weight: 1 });
     expect(hero.addBuff(new Buff(multi))).toBe(true);
     expect(hero.addBuff(new Buff(multi))).toBe(true);
-    expect(hero.buffs.length).toBe(3);
+    expect(hero.buffs.length).toBe(2);
   });
 
   it('only removes buffs, never skills', () => {

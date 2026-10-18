@@ -358,9 +358,9 @@ describe('sending to a whole table', () => {
 
 describe('a whole round, as the opponent hears it', () => {
   const DOC = `Ability Showdown
-Each player commits a card from their hand face down.
+All players commit a card from their hand face down.
 When they are ready, reveal.
-Each player puts the card they committed into their garbage.`;
+All players move the card they committed to their garbage.`;
 
   it('learns nothing about a hand until its cards are revealed', async () => {
     const t = await table({ Ann: 'ANN-PLAYED', Bo: 'BO-PLAYED' });

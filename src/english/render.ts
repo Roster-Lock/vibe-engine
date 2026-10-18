@@ -46,8 +46,8 @@ import type {
   ValueIR,
 } from '../ir/index.js';
 import { mathToSource } from '../ir/math-expression.js';
-import { REVEAL_CARD_TEXT, REVEAL_TEXT, castCardText, chooseText, moveCardText, moveCardsText, ownerWords, removeCountersText, castCardsText, playText, createText, revealCardsText, splitText, choosePileText, zoneAbilityText, drawText, scryText, moveChosenText, rollPhrase, rollText, storeText, votesPhrase } from './rounds.js';
-import { rollStatOfPath, variableNameOfPath, votesOptionOfPath } from './describe.js';
+import { REVEAL_CARD_TEXT, contestLines, REVEAL_TEXT, castCardText, chooseText, moveCardText, moveCardsText, ownerWords, removeCountersText, castCardsText, playText, createText, revealCardsText, splitText, choosePileText, zoneAbilityText, drawText, scryText, moveChosenText, rollPhrase, rollText, storeText, votesPhrase } from './rounds.js';
+import { rollStatOfPath, variableNameOfPath, voteStatOfPath, votesOptionOfPath } from './describe.js';
 import { EVENT_PHRASES } from './vocabulary.js';
 
 /**
@@ -152,11 +152,14 @@ class Renderer {
     if (value.kind === 'rolled') return rollPhrase(value.stat);
     if (value.kind === 'variable') return value.name;
     if (value.kind === 'votes') return votesPhrase(value.option);
+    if (value.kind === 'voteStat') return `the ${value.stat} vote`;
     if (value.kind === 'expr') {
       const stat = rollStatOfPath(value.expression);
       if (stat) return rollPhrase(stat);
       const votes = votesOptionOfPath(value.expression);
       if (votes !== undefined) return votesPhrase(votes);
+      const voteStat = voteStatOfPath(value.expression);
+      if (voteStat !== undefined) return `the ${voteStat} vote`;
       return variableNameOfPath(value.expression) ?? `(${mathToSource(value.expression)})`;
     }
     if (value.kind === 'count') return this.#fail('an amount that counts characters (a block-view amount)', value);
@@ -261,10 +264,10 @@ class Renderer {
   #query(query: EntityQueryIR, ability: AbilityIR | undefined): string | undefined {
     switch (query.kind) {
       case 'self':
-        // One spelling per frame: `this character` reads back as the same
-        // node, and it is what keeps an ability's generated `description`
-        // stable when a document is rendered.
-        return 'this character';
+        // One spelling per frame: `this` reads back as the same node, and it
+        // is what keeps an ability's generated `description` stable when a
+        // document is rendered.
+        return 'this';
       case 'picked': {
         if (!ability) return 'target character';
         const parts = ['target'];
@@ -280,7 +283,9 @@ class Renderer {
       case 'bound':
         return `the ${query.name}`;
       case 'event':
-        if (query.role === 'source') return `the source ${query.sourceType ?? 'character'}`;
+        if (query.role === 'source') {
+          return query.sourceType === 'buff' ? this.#fail('a buff as the cause of an event', query) : 'the source';
+        }
         return this.#fail('an effect aimed at the triggering character itself', query);
       case 'all':
         return this.#all(query);
@@ -365,48 +370,23 @@ class Renderer {
   }
 
   /**
-   * `If that total is 10 or more, ` — a comparison on a number. Only values the
+   * `If that value >= 10, ` — a comparison on a number. Only values the
    * language can name are read this way (a roll, a stored name, a formula); a
    * comparison on a gauge or a count is some other phrase's, not this one's.
+   * Several comparisons are an `and`.
    */
   #valueGuard(predicate: PredicateIR): string | undefined {
     const nameable = (value: ValueIR): boolean =>
-      value.kind === 'rolled' || value.kind === 'votes' || value.kind === 'variable' || value.kind === 'expr' || value.kind === 'const';
-    const same = (a: ValueIR, b: ValueIR): boolean => JSON.stringify(a) === JSON.stringify(b);
-    // `N to M`: both bounds on the same value.
-    if (predicate.kind === 'and' && predicate.clauses.length === 2) {
-      const [low, high] = predicate.clauses;
-      if (
-        low?.kind === 'compare' &&
-        high?.kind === 'compare' &&
-        low.op === '>=' &&
-        high.op === '<=' &&
-        nameable(low.left) &&
-        same(low.left, high.left) &&
-        low.right.kind === 'const' &&
-        high.right.kind === 'const'
-      ) {
-        const value = this.#value(low.left);
-        return value === undefined ? undefined : `If ${value} is ${low.right.value} to ${high.right.value}, `;
-      }
-      return undefined;
-    }
-    if (predicate.kind !== 'compare' || !nameable(predicate.left)) return undefined;
-    const value = this.#value(predicate.left);
-    if (value === undefined) return undefined;
-    const { op, right } = predicate;
-    if (right.kind === 'const') {
-      if (op === '=') return `If ${value} is ${right.value}, `;
-      if (op === '>=') return `If ${value} is ${right.value} or more, `;
-      if (op === '<=') return `If ${value} is ${right.value} or less, `;
-    }
-    if (op === '>' || op === '<' || op === '=') {
-      const other = this.#value(right);
-      if (other === undefined) return undefined;
-      const word = op === '>' ? 'higher than' : op === '<' ? 'lower than' : 'the same as';
-      return `If ${value} is ${word} ${other}, `;
-    }
-    return undefined;
+      value.kind === 'rolled' || value.kind === 'votes' || value.kind === 'voteStat' || value.kind === 'variable' || value.kind === 'expr' || value.kind === 'const';
+    const comparison = (compare: PredicateIR): string | undefined => {
+      if (compare.kind !== 'compare' || !nameable(compare.left) || !nameable(compare.right)) return undefined;
+      const left = this.#value(compare.left);
+      const right = this.#value(compare.right);
+      return left === undefined || right === undefined ? undefined : `${left} ${compare.op} ${right}`;
+    };
+    const parts = predicate.kind === 'and' ? predicate.clauses.map(comparison) : [comparison(predicate)];
+    if (parts.length === 0 || parts.some((part) => part === undefined)) return undefined;
+    return `If ${parts.join(' and ')}, `;
   }
 
   /* ------------------------------ modifiers ---------------------------- */
@@ -567,7 +547,7 @@ class Renderer {
       case 'choose': {
         this.#choosers.set(effect.round, { players: effect.players, secret: effect.secret });
         if (effect.pick.kind === 'card') {
-          return chooseText(effect.players, { kind: 'card', zone: effect.pick.from }, effect.secret);
+          return chooseText(effect.players, { kind: 'card', zone: effect.pick.from }, effect.secret, effect.order);
         }
         if (effect.pick.kind === 'label') {
           if (effect.players !== 'each') return this.#fail('a vote that not every player casts', effect);
@@ -577,7 +557,7 @@ class Renderer {
         if (min.kind !== 'const' || max.kind !== 'const') {
           return this.#fail('a number range that is not a plain number', effect);
         }
-        return chooseText(effect.players, { kind: 'number', min: min.value, max: max.value }, effect.secret);
+        return chooseText(effect.players, { kind: 'number', min: min.value, max: max.value }, effect.secret, effect.order);
       }
       case 'reveal':
         return REVEAL_TEXT;
@@ -717,8 +697,9 @@ class Renderer {
         sameGauge(candidate.gauge, trigger.gauge) &&
         candidate.change === trigger.change,
     );
-    // Each phrase lists its plural form first, its singular second.
-    const words = phrase?.verbs[trigger.mode === 'single' ? 1 : 0];
+    // A phrase lists its plural form first and its singular second, or a
+    // single form that serves both.
+    const words = phrase?.verbs[trigger.mode === 'single' ? 1 : 0] ?? (phrase?.verbs.length === 1 ? phrase.verbs[0] : undefined);
     if (!words) {
       return this.#fail(
         `an event the sentence grammar has no verb for (${trigger.event})`,
@@ -828,23 +809,23 @@ class Renderer {
   }
 
   #buffLines(buff: BuffIR): string[] {
-    const options: string[] = [];
-    if (buff.stacks) options.push('stacks');
-    if (buff.weight !== 1) options.push(`weight ${buff.weight}`);
-    if (buff.duration) {
-      options.push(buff.duration.kind === 'endOfTurn' ? 'until end of turn' : `for ${buff.duration.count} turns`);
-    }
-    const lines = [`Buff ${buff.name}${options.length > 0 ? ` (${options.join(', ')})` : ''}`];
+    const lines = [`Buff ${buff.name}`];
+    if (buff.weight !== 1) lines.push(`Weight ${buff.weight}.`);
+    if (buff.fading !== undefined) lines.push(`Fading ${buff.fading}.`);
     for (const trigger of buff.triggers) {
       // A payload sentence is a buff trigger on the default event with no
-      // gate — the inverse of `lower.ts`'s `DEFAULT_BUFF_EVENT`.
+      // gate — the turn-start prefix a buff sentence is written with.
+      const turnPrefix =
+        trigger.event === 'turn:start' ? 'When a turn starts' : trigger.event === 'turn:end' ? 'When a turn ends' : undefined;
       const payload =
-        trigger.event === 'turn:start' &&
+        turnPrefix !== undefined &&
         trigger.mode === 'single' &&
         trigger.when === undefined &&
         trigger.filter === undefined;
       if (payload) {
-        for (const step of trigger.steps) lines.push(...this.#stepLines(step, undefined, true));
+        for (const step of trigger.steps) {
+          for (const line of this.#stepLines(step, undefined, true)) lines.push(`${turnPrefix} then ${lowerFirst(line)}`);
+        }
         continue;
       }
       lines.push(this.#orNote(this.#trigger(trigger, undefined)));
@@ -866,6 +847,7 @@ class Renderer {
     if (ir.imports.length > 0) {
       blocks.push(ir.imports.map((entry) => `import ${entry.name} from "${entry.path}"`));
     }
+    for (const contest of ir.contests ?? []) blocks.push(contestLines(contest));
     for (const ability of ir.abilities) blocks.push(this.#abilityLines(ability));
     for (const buff of ir.buffs) blocks.push(this.#buffLines(buff));
     for (const zone of ir.zones ?? []) {

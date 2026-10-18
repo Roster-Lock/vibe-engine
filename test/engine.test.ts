@@ -381,7 +381,7 @@ describe('GameEngine', () => {
     const engine = createEngine({ seed: 'aura-scope' });
 
     // Stackable so both auras can land a mark on the same squire.
-    const blessed = buff({ name: 'Blessed', weight: 2, removable: false, stacks: true });
+    const blessed = buff({ name: 'Blessed', weight: 2, removable: false });
     const fleeting = buff({ name: 'Fleeting', weight: 3 }); // ordinary removable buff
     // Aura one fires on turn:start; aura two on turn:end — deterministic order.
     const auraOne = buff({
@@ -978,7 +978,6 @@ describe('GameEngine', () => {
     const loop = buff({
       name: 'Loop',
       weight: 1,
-      stacks: true,
       abilities: [
         auto({
           name: 'Reapply',

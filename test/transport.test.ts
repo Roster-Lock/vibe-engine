@@ -522,9 +522,9 @@ class Idle extends Player {
 }
 
 const SHOWDOWN = `Ability Showdown
-Each player commits a card from their hand face down.
+All players commit a card from their hand face down.
 When they are ready, reveal.
-Each player puts the card they committed into their garbage.`;
+All players move the card they committed to their garbage.`;
 
 /** A room, an engine, a remote player per user, and the link between them. */
 async function onlineGame() {

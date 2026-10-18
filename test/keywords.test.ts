@@ -61,7 +61,7 @@ const document = (lines: readonly string[]): string => lines.join('\n');
 describe('registered keywords — compiling', () => {
   it('accepts a registered keyword as a legal card line', () => {
     const result = compileCardDocument(
-      document(['Card Shieldbearer', 'Cost 2', 'Creature 1/4', 'Taunt.']),
+      document(['Card Shieldbearer', '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 1, "health": 4 } }', 'Taunt.']),
       { keywords: defaultKeywords() },
     );
     expect(errors(result.diagnostics)).toEqual([]);
@@ -70,7 +70,7 @@ describe('registered keywords — compiling', () => {
 
   it('accepts a keyword the game does not implement, and does not grant it', () => {
     const result = compileCardDocument(
-      document(['Card Goblin Scout', 'Cost 2', 'Creature 2/2', 'Discover(2).']),
+      document(['Card Goblin Scout', '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 2, "health": 2 } }', 'Discover(2).']),
       { keywords: discoverRegistry() },
     );
     expect(errors(result.diagnostics)).toEqual([]);
@@ -81,7 +81,7 @@ describe('registered keywords — compiling', () => {
 
   it('refuses arguments on a keyword that cannot read them yet', () => {
     const result = compileCardDocument(
-      document(['Card Shieldbearer', 'Cost 2', 'Creature 1/4', 'Taunt(3).']),
+      document(['Card Shieldbearer', '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 1, "health": 4 } }', 'Taunt(3).']),
       { keywords: defaultKeywords() },
     );
     expect(codes(result.diagnostics)).toContain('card-keyword-argument');
@@ -89,13 +89,13 @@ describe('registered keywords — compiling', () => {
 
   it('tells the author at the parens when a keyword’s argument count is wrong', () => {
     const result = compileCardDocument(
-      document(['Card Goblin Scout', 'Cost 2', 'Creature 2/2', 'Discover().']),
+      document(['Card Goblin Scout', '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 2, "health": 2 } }', 'Discover().']),
       { keywords: discoverRegistry() },
     );
     const diagnostic = errors(result.diagnostics).find((d) => d.code === 'card-keyword-arity');
     expect(diagnostic?.message).toContain('takes 1 argument');
     // The span lands on the author's line, not on a synthetic one.
-    expect(document(['Card Goblin Scout', 'Cost 2', 'Creature 2/2', 'Discover().']).slice(
+    expect(document(['Card Goblin Scout', '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 2, "health": 2 } }', 'Discover().']).slice(
       diagnostic!.start,
       diagnostic!.end,
     )).toContain('Discover');
@@ -103,7 +103,7 @@ describe('registered keywords — compiling', () => {
 
   it('refuses words after the parentheses — arguments go inside them', () => {
     const result = compileCardDocument(
-      document(['Card Goblin Scout', 'Cost 2', 'Creature 2/2', 'Discover(2) and also 3.']),
+      document(['Card Goblin Scout', '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 2, "health": 2 } }', 'Discover(2) and also 3.']),
       { keywords: discoverRegistry() },
     );
     expect(codes(result.diagnostics)).toContain('card-keyword-trailing');
@@ -116,7 +116,7 @@ describe('registered keywords — compiling', () => {
     // a keyword called `Discover land`?). So the old form is an error that says
     // where the argument belongs.
     const result = compileCardDocument(
-      document(['Card Goblin Scout', 'Cost 2', 'Creature 2/2', 'Discover 2.']),
+      document(['Card Goblin Scout', '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 2, "health": 2 } }', 'Discover 2.']),
       { keywords: discoverRegistry() },
     );
     const diagnostic = errors(result.diagnostics).find((d) => d.code === 'card-keyword-trailing');
@@ -125,7 +125,7 @@ describe('registered keywords — compiling', () => {
 
   it('reports an unclosed parenthesis instead of reading it as bare', () => {
     const result = compileCardDocument(
-      document(['Card Goblin Scout', 'Cost 2', 'Creature 2/2', 'Discover(2']),
+      document(['Card Goblin Scout', '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 2, "health": 2 } }', 'Discover(2']),
       { keywords: discoverRegistry() },
     );
     expect(codes(result.diagnostics)).toContain('card-keyword-unclosed');
@@ -139,7 +139,7 @@ describe('registered keywords — compiling', () => {
       parse: () => [],
     });
     const result = compileCardDocument(
-      document(['Card Goblin Scout', 'Cost 2', 'Creature 2/2', 'Discover(2, land).']),
+      document(['Card Goblin Scout', '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 2, "health": 2 } }', 'Discover(2, land).']),
       { keywords },
     );
     expect(errors(result.diagnostics)).toEqual([]);
@@ -148,7 +148,7 @@ describe('registered keywords — compiling', () => {
 
   it('keeps the keyword wording on the card face', () => {
     const result = compileCardDocument(
-      document(['Card Shieldbearer', 'Cost 2', 'Creature 1/4', 'Taunt.']),
+      document(['Card Shieldbearer', '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 1, "health": 4 } }', 'Taunt.']),
       { keywords: defaultKeywords() },
     );
     expect(result.cards[0]?.rulesText).toContain('Taunt.');
@@ -156,16 +156,16 @@ describe('registered keywords — compiling', () => {
 
   it('still rejects a card-shaped word that is not a known line', () => {
     const result = compileCardDocument(
-      document(['Card Shieldbearer', 'Cost 2', 'Creature 1/4', 'Creature 2/3', 'Taunt.']),
+      document(['Card Shieldbearer', '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 1, "health": 4 } }', 'Creature 2/3', 'Taunt.']),
       { keywords: defaultKeywords() },
     );
     const message = errors(result.diagnostics).map((d) => d.message).join('\n');
-    expect(message).toContain('already says it is a creature');
+    expect(message).toContain('JSON header');
   });
 
   it('says so when a keyword is written on the wrong card kind', () => {
     const result = compileCardDocument(
-      document(['Card Fireball', 'Cost 4', 'Spell', 'Taunt.', 'Deal 6 damage to target enemy character.']),
+      document(['Card Fireball', '{ "cost": 4, "type": "spell" }', 'Taunt.', 'Deal 6 damage to target enemy character.']),
       { keywords: defaultKeywords() },
     );
     expect(codes(result.diagnostics)).toContain('card-spell-keyword');
@@ -178,7 +178,7 @@ describe('registered keywords — compiling', () => {
       cardKinds: ['spell'],
     });
     const result = compileCardDocument(
-      document(['Card Insight', 'Cost 1', 'Spell', 'Cantrip.', 'Heal 1 to target ally character.']),
+      document(['Card Insight', '{ "cost": 1, "type": "spell" }', 'Cantrip.', 'Heal target ally character for 1.']),
       { keywords },
     );
     expect(codes(result.diagnostics)).not.toContain('card-spell-keyword');
@@ -191,7 +191,7 @@ describe('registered keywords — compiling', () => {
       handled: false,
     });
     const result = compileCardDocument(
-      document(['Card Shieldbearer', 'Cost 2', 'Creature 1/4', 'Taunt.']),
+      document(['Card Shieldbearer', '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 1, "health": 4 } }', 'Taunt.']),
       { keywords },
     );
     expect(errors(result.diagnostics)).toEqual([]);
@@ -200,7 +200,7 @@ describe('registered keywords — compiling', () => {
 
 describe('registered keywords — completing', () => {
   it('offers a keyword with arguments as a template, so the parens are visible', () => {
-    const source = document(['Card Goblin Scout', 'Cost 2', 'Creature 2/2', '']);
+    const source = document(['Card Goblin Scout', '{ "cost": 2, "type": "creature", "creatureConfig": { "power": 2, "health": 2 } }', '']);
     const labels = completeCardAt(source, source.length, undefined, undefined, discoverRegistry()).map(
       (s) => s.label,
     );
@@ -210,13 +210,13 @@ describe('registered keywords — completing', () => {
   });
 
   it('offers a built-in keyword without a host registry', () => {
-    const source = document(['Card X', 'Cost 1', 'Creature 1/1', '']);
+    const source = document(['Card X', '{ "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }', '']);
     const suggestions = completeCardAt(source, source.length);
     expect(suggestions.map((s) => s.label)).toContain('Taunt.');
   });
 
   it('does not offer a creature-only keyword on a spell', () => {
-    const source = document(['Card Fireball', 'Cost 4', 'Spell', '']);
+    const source = document(['Card Fireball', '{ "cost": 4, "type": "spell" }', '']);
     const labels = completeCardAt(source, source.length, undefined, undefined, defaultKeywords()).map(
       (s) => s.label,
     );

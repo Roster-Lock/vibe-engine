@@ -118,7 +118,6 @@ export function makeReaper(): CharacterType {
 export const frail = buff({
   name: 'Frail',
   weight: 1,
-  stacks: true,
   abilities: [maxModifier({ name: 'Frail', add: -30, gauge: 'hp' })],
 });
 

@@ -38,7 +38,6 @@
 /* ------------------------- the declarative IR ------------------------- */
 export type {
   DocumentIR,
-  DurationIR,
   AbilityIR,
   ActionMatchIR,
   ActionRewriteIR,

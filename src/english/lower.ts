@@ -36,6 +36,7 @@ import {
   rollStatOfPath,
   variableNameOfPath,
   votesOptionOfPath,
+  voteStatOfPath,
   availableSummary,
   effectSummary,
   modifierSummary,
@@ -76,9 +77,6 @@ const LIFE_GAUGE = { kind: 'life' } as const;
  */
 const ROUND = 'choice';
 
-/** The event a `Buff` sentence with no `When …` prefix fires on. */
-const DEFAULT_BUFF_EVENT = 'turn:start';
-
 /** A literal number lowers to a flat `const`; anything richer keeps its formula. */
 function amount(value: MathExpression): ValueIR {
   if (value.kind === 'number') return { kind: 'const', value: value.value };
@@ -88,6 +86,8 @@ function amount(value: MathExpression): ValueIR {
   // A bare word the language does not own is a value stored earlier.
   const votes = votesOptionOfPath(value);
   if (votes !== undefined) return { kind: 'votes', option: votes };
+  const voteStat = voteStatOfPath(value);
+  if (voteStat !== undefined) return { kind: 'voteStat', stat: voteStat };
   const variable = variableNameOfPath(value);
   return variable !== undefined ? { kind: 'variable', name: variable } : { kind: 'expr', expression: value };
 }
@@ -149,7 +149,8 @@ function lowerChars(chars: CharsPhrase): EntityQueryIR {
       return {
         kind: 'event',
         role: 'source',
-        ...(chars.sourceType ? { sourceType: chars.sourceType } : {}),
+        // The language names only the character that caused the event.
+        sourceType: 'character',
       };
     case 'bound':
       return { kind: 'bound', name: chars.name ?? '' };
@@ -228,24 +229,16 @@ export function lowerSteps(sentences: readonly Sentence[]): StepIR[] {
 }
 
 /**
- * `<value> is <test>` as a predicate over the value. Each shape lowers to exactly
- * the comparison the renderer reads back: a bare `N` is `=`, `N or more` is `>=`,
- * `N or less` is `<=`, `N to M` is both, and a comparison is `>` / `<` / `=`.
+ * `<value> <op> <value> [and …]` as a predicate: each comparison is a `compare`
+ * with its operator as written, and several are an `and`.
  */
 function lowerValueGuard(clause: Extract<IfClause, { kind: 'value' }>): PredicateIR {
-  const left = amount(clause.value);
-  const against = (op: '<' | '<=' | '>' | '>=' | '=', n: number): PredicateIR => ({
+  const clauses: PredicateIR[] = clause.comparisons.map((comparison) => ({
     kind: 'compare',
-    op,
-    left,
-    right: { kind: 'const', value: n },
-  });
-  const test = clause.test;
-  if (test.kind === 'compare') return { kind: 'compare', op: test.op, left, right: amount(test.other) };
-  if (test.exact) return against('=', test.min!);
-  const clauses: PredicateIR[] = [];
-  if (test.min !== null) clauses.push(against('>=', test.min));
-  if (test.max !== null) clauses.push(against('<=', test.max));
+    op: comparison.op,
+    left: amount(comparison.value),
+    right: amount(comparison.other),
+  }));
   return clauses.length === 1 ? clauses[0]! : { kind: 'and', clauses };
 }
 
@@ -473,8 +466,9 @@ function lowerSentence(sentence: Sentence): EffectIR {
             : sentence.pick.kind === 'label'
               ? { kind: 'label', options: sentence.pick.options }
               : { kind: 'number', min: amount({ kind: 'number', value: sentence.pick.min }), max: amount({ kind: 'number', value: sentence.pick.max }) },
-        // An open vote says who goes first; every other choice goes round from the caster.
-        ...(sentence.order ? { order: sentence.order } : {}),
+        // An open choice says who goes first; the default (the caster) is left out so the
+        // IR has one spelling for it.
+        ...(sentence.order && sentence.order !== 'caster-first' ? { order: sentence.order } : {}),
       };
     case 'reveal':
       return { kind: 'reveal', round: ROUND };
@@ -551,7 +545,8 @@ function lowerAbility(section: AbilitySection): AbilityIR {
 function lowerBuff(section: BuffSection): BuffIR {
   const byEvent = new Map<string, Sentence[]>();
   for (const sentence of section.sentences) {
-    const event = (sentence.event ?? DEFAULT_BUFF_EVENT).replace(/:yours$/, '');
+    if (sentence.event === undefined) continue; // the parser already reported it
+    const event = sentence.event.replace(/:yours$/, '');
     const sentences = byEvent.get(event) ?? [];
     sentences.push(sentence);
     byEvent.set(event, sentences);
@@ -579,8 +574,7 @@ function lowerBuff(section: BuffSection): BuffIR {
     id: slug(section.name),
     name: section.name,
     weight: section.weight,
-    stacks: section.stacks,
-    ...(section.duration ? { duration: section.duration } : {}),
+    ...(section.fading !== undefined ? { fading: section.fading } : {}),
     triggers,
     ...(section.modifiers.length > 0
       ? {
@@ -632,6 +626,9 @@ export function lowerDocument(doc: Doc, buffSections: readonly BuffSection[] = d
     abilities: doc.abilities.map(lowerAbility),
     buffs: buffSections.map(lowerBuff),
     ...(doc.zones.length > 0 ? { zones: doc.zones.map(lowerZone) } : {}),
+    ...(doc.contests.some((section) => section.contest)
+      ? { contests: doc.contests.flatMap((section) => (section.contest ? [section.contest] : [])) }
+      : {}),
     // Written outside any Buff: they belong to no status, so the host
     // decides which character carries them (`CompileResult.triggers`).
     triggers: doc.triggers.map((trigger, index) => lowerTrigger(trigger, 'game', index)),

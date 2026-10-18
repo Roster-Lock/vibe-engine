@@ -168,7 +168,7 @@ describe('renderDocument', () => {
     const { text, gaps } = renderDocument(ir);
     expect(gaps).toHaveLength(3);
     // The one sentence English can say survives, in order.
-    expect(text).toContain('Heal this character for 7.');
+    expect(text).toContain('Heal this for 7.');
     // Each loss is visible where the author will see it, and named in `gaps`.
     for (const gap of gaps) expect(text).toContain(`${GAP_MARKER}${gap.reason}`);
     // A lossy view is still a *valid* view.

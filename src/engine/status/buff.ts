@@ -20,7 +20,6 @@ export class Buff implements StatusBase {
   readonly weight: number;
   readonly removable: boolean;
   readonly removedOnDefeat: boolean;
-  readonly stacks: boolean;
   readonly vars: Record<string, unknown>;
   readonly abilities: readonly Ability[];
   readonly caster: Character | undefined;
@@ -40,7 +39,6 @@ export class Buff implements StatusBase {
     this.weight = def.weight;
     this.removable = def.removable ?? true;
     this.removedOnDefeat = def.removedOnDefeat ?? true;
-    this.stacks = def.stacks ?? false;
     this.vars = def.variables ? def.variables() : {};
     this.abilities = def.abilities ?? [];
     this.direction = def.direction;

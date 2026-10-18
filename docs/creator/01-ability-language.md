@@ -18,7 +18,7 @@ simplest document:
 
 ```
 Ability Sacrifice
-Destroy this character.
+Destroy this.
 Heal all other ally characters for 25.
 ```
 
@@ -28,8 +28,9 @@ An ability is a heading line followed by **effect sentences** (each ends with
 
 ```
 Ability Soul Rot
-Buff Frailty (stacks)
 Add Frailty to target enemy character.
+
+Buff Frailty
 ```
 
 Each ability compiles to one engine `cast` (manual) ability. A sentence that
@@ -64,7 +65,7 @@ Every effect that hits characters names them with one of these phrases:
 
 | Phrase | Means | Compiles to |
 | --- | --- | --- |
-| `this` | Whatever is using the ability — `this character` is the longer spelling | `ctx.self` |
+| `this` | Whatever is using the ability, whatever kind of thing it is | `ctx.self` |
 | `target character` | The player picks one character | the ability's `targeting` |
 | `target enemy character` | The player picks one enemy | `targeting: { who: 'enemy', count: 1 }` |
 | `target ally character` | The player picks one ally | `targeting: { who: 'ally', count: 1 }` |
@@ -73,7 +74,8 @@ Every effect that hits characters names them with one of these phrases:
 | `all ally characters` | Every ally, **including** the user | `validTargets({ who: 'ally' })` |
 | `all other ally characters` | Every ally **except** the user | above minus `self` |
 | `all characters owned by you` | Everything the user's player controls | `who: 'any'` + owner match |
-| `all characters owned by the opponent` | Everything the enemy player controls | owner match on enemy players |
+| `all other characters` | Every character except the user | above minus `self` |
+| `all characters owned by opponents` | Everything any opponent controls | owner match on enemy players |
 
 Rules:
 
@@ -83,13 +85,13 @@ Rules:
   *what*.
 - **Counts are digits.** `1 or more`, not `one or more`; a spelled-out
   number gets a diagnostic naming the digit.
-- An ownership clause (`owned by you` / `owned by the opponent`) may follow any
+- An ownership clause (`owned by you` / `owned by opponents`) may follow any
   `all …` group: `all characters owned by you`, `all enemy characters owned by
-  the opponent`.
+  opponents`.
 - Only one *kind* of `target …` sentence may appear in an ability (the engine
   gives a manual ability one targeting pattern). Repeating the same kind is
   fine — every sentence then reads the same picked character.
-- `this character` may not take an ownership or `with` clause.
+- `this` never takes a noun (`this character` is an error), an ownership clause or a `with` clause.
 - A character phrase never starts a sentence by itself — actions come first
   (see below) except for win/lose-the-game, which is subject-first English.
 
@@ -113,15 +115,18 @@ Destroy all enemy characters with (poison or thorns) and hp <= 40.
 | `with mana >= 5` | current mana check | `c.mana.current` |
 | `with poison` | the character currently has that buff | `c.hasStatus(<buff id>)` |
 
+`hp` and `mana` are only the default gauge words. Gauges belong to a game, so a host
+passes the ids its game declares (`CompileOptions.gauges`) and those are what `with`
+and `incoming <gauge> loss` accept.
+
 Rules:
 
-- Conditions combine by their separators: `and` (or a comma) requires
+- Conditions combine by their separators: `and` requires
   **both** sides, `or` accepts **either**. Parentheses group expressions, and
   `not` negates one expression. `and` binds tighter than `or`:
   `with poison or thorns and hp <= 40` means `poison OR (thorns AND hp <=
   40)`. There is **no limit** on how many conditions a clause carries, and
-  an Oxford comma (`poison, thorns, and hp <= 40` — or `, or hp <= 40`) is
-  accepted.
+  a comma is never a joiner — it only separates a condition from its effect.
 - Conditions are retained as a recursive expression tree, so grouped filters
   can be displayed unambiguously as math in the editor.
 - `<buff>` in a buff condition resolves exactly like `Add <buff>` — declared
@@ -188,7 +193,8 @@ character.` picks one thing and needs no name.
 ## `Available while …` — when an ability can be used
 
 ```
-Buff Charged (until end of turn)
+Buff Charged
+Fading 0.
 
 Ability Counterstrike
 Available while this has Charged.
@@ -239,9 +245,9 @@ If this has hp < 10, heal this for 20.
 same operation is called in code, and they make "one of them" versus "all
 of them" impossible to misread.
 
-The condition after `has` is the same grammar as a `with` clause, with one
-difference: **a comma ends it** rather than meaning `and`, because the
-comma separates the condition from the effect. Write `and` out:
+The condition after `has` is the same grammar as a `with` clause. **A comma
+ends it**, because the comma separates the condition from the effect; join
+conditions with `and` / `or`:
 
 ```
 If this has hp < 10 and mana > 5, heal this for 20.
@@ -250,8 +256,23 @@ If this has hp < 10 and mana > 5, heal this for 20.
 An `If …,` clause also works inside a trigger's effect:
 
 ```
-when a character dies then if this has hp < 150, heal this for 5.
+when a character is destroyed then if this has hp < 150, heal this for 5.
 ```
+
+### Comparing numbers
+
+A condition can compare two amounts — a roll, a stored name, a formula — with
+`<`, `<=`, `>`, `>=` or `=`, and join comparisons with `and`:
+
+```
+If that value >= 15, deal 50 damage to this.
+If that value >= 5 and that value <= 8, deal 7 damage to this.
+If AttackerRoll > DefenderRoll, deal 10 damage to this.
+```
+
+There are no word forms (`is higher than`, `is 10 or more`). A count phrase
+(`2 or more`, `2 to 5`) stays for counting *things* — triggers, `if there are`,
+`Repeat … times`, and roll-table lines.
 
 ## `You may …` — optional effects
 
@@ -321,7 +342,6 @@ effects turn the condition false.
 | --- | --- |
 | `Deal <n> damage to <chars>.` | Damage the characters' HP by `n`. |
 | `Heal <chars> for <n>.` | Heal the characters by `n`. |
-| `Heal <n> to <chars>.` | Same — amount-first word order also accepted. |
 | `Destroy <chars>.` | Destroy the characters (engine destroy action — deferred, resolved with the batch). |
 | `Add <buff> to <chars>.` | Apply a buff to each character. `<buff>` must be declared in the document or built in. |
 | `Remove <buff> from <chars>.` | Remove the buff (by its id) from each character. |
@@ -330,8 +350,7 @@ effects turn the condition false.
 | `You win the game.` / `You lose the game.` | The ability user's player wins / loses. |
 | `All players win the game.` / `All players lose the game.` | Every registered player wins / loses (all-at-once resolves as a draw or last-team-standing per the engine). |
 
-`win(s)` / `lose(s)` are accepted interchangeably (no subject–verb agreement
-checking in the prototype). `n` is a non-negative number.
+`win` and `lose` are the only forms (`You win`, `All players win`). `n` is a non-negative number.
 
 ## Action modifiers
 
@@ -339,7 +358,7 @@ A `Buff` may change what happens to actions flowing past its wearer,
 instead of making something happen:
 
 ```
-Buff Rage (stacks)
+Buff Rage
 Outgoing damage is increased by 5.
 
 Buff Iron Hide
@@ -433,7 +452,7 @@ Four things worth knowing:
   damage nets to −35 by the arithmetic, which still lands as 0 damage, not
   35 healing.
 - **Stacking needs no arithmetic.** Every attached instance's modifier runs,
-  so a `(stacks)` buff with "+5" gives +15 at three stacks on its own.
+  so a buff with "+5" gives +15 at three stacks on its own.
 - **A chance is rolled per action**, from the engine's seeded PRNG, so a
   replay of the same seed rolls the same. Draws come from the same stream as
   the trigger shuffle, so adding a chance modifier shifts every later draw.
@@ -479,7 +498,7 @@ Scry(you, 3).
 `Move <cards> from <zone> to <zone>.` — **the cards**: `the top card`, `the top 3 cards`,
 `the bottom card`; `a card`, `2 cards` (the caster picks); `a random card`; `all cards`;
 `creature` or `spell` may go before `card`. **A zone** is `your hand`, `its owner's garbage`
-(or `their`), `target opponent's hand`, `each opponent's hand`, `each player's hand`, or a
+(or `their`), `target opponent's hand`, `all opponents' hand`, `all players' hand`, or a
 shared zone written bare (`play`, `the stack`). A custom zone takes `zone` after it.
 
 - **Some zones only hold their owner's cards.** A hand, a deck and a garbage refuse a card
@@ -520,106 +539,158 @@ the whole card.
 
 ```
 Zone Suspend (per-player, public)
-At the start of your turn, remove a counter from all cards in this zone.
-At the start of your turn, cast all cards with no counters from this zone without paying their cost.
+When your turn starts then remove a counter from all cards in this zone.
+When your turn starts then cast all cards with no counters from this zone without paying their cost.
 
 Card Ancestral Vision
-Cost 6
-Spell
+{ "cost": 6, "type": "spell" }
 Draw(you, 3).
-Suspend: Move this card to the Suspend zone with 2 counters on it.
+Suspend: Move this to the Suspend zone with 2 counters on it.
 ```
 
 - `Zone <name> (options)` **declares** a zone: `per-player` or `shared`; `public`, `owner` or
   `hidden`; `ordered`; `owner-only`. Its lines are the zone's standing rules.
-- `Move this card to the Suspend zone with 2 counters on it.` puts counters on a card;
+- `Move this to the Suspend zone with 2 counters on it.` puts counters on a card;
   `Remove a counter from <cards> in <zone>.`; `all cards with no counters`.
 - `<Name>: <sentence>` on a card is an ability the card has while it is in its owner's hand.
 - `Cast <cards> from <zone> without paying their cost.` casts cards for the zone's owner.
 
 ## Contests: winners and losers
 
-A contest is a game played by a **list of players**, stated the way a rulebook states it:
+A contest is a function of a **list of players**: it receives them, and what comes out is who won,
+who lost, or that it was a tie — `(players) => { winners, losers, isTie }`. It is stated the way a
+rulebook states it:
 
 ```
 Contest Rock Paper Scissors
-The player count must be 2.
-Players commit an option from "Rock", "Paper" and "Scissors".
-If both players choose the same option, it is a tie.
-If player 1 chooses Rock and player 2 chooses Scissors, player 1 wins and player 2 loses.
-If player 1 chooses Scissors and player 2 chooses Paper, player 1 wins and player 2 loses.
-If player 1 chooses Paper and player 2 chooses Rock, player 1 wins and player 2 loses.
-Otherwise player 2 wins and player 1 loses.
+Players 2.
+All players commit Rock, Paper or Scissors face down.
+When they are ready, reveal.
+If all players committed the same option, it is a tie.
+If player 1 committed Rock and player 2 committed Scissors, player 1 win and player 2 lose.
+If player 1 committed Scissors and player 2 committed Paper, player 1 win and player 2 lose.
+If player 1 committed Paper and player 2 committed Rock, player 1 win and player 2 lose.
+Otherwise player 2 win and player 1 lose.
 
 Card Showdown
-Cost 3
-Spell
+{ "cost": 3, "type": "spell" }
 You and target opponent play Rock Paper Scissors.
 Draw(the winners, 2).
 Deal 5 damage to all characters owned by the losers.
 ```
 
-- **The list:** `You and target opponent play …`, `Each player plays …`, `Each opponent plays …`. "Player 1" is the
+- **The list:** `You and target opponent play …`, `All players play …`, `All opponents play …`. "Player 1" is the
   first of the list. If the contest states a player count the list must match, or the card fails to resolve.
-- **Commit/reveal:** every player commits an option face down and they are turned over together (an invalid
-  option loses the game, as with any commitment). Options are matched exactly, capitals included.
-- **The rules** are read in order and the first that fits decides: a tie (nobody wins or loses), an
-  `If player N chooses X and …, player N wins and player N loses.` rule, or `Otherwise …`.
+- **Commit/reveal:** a contest has no options declaration. Its options are the names in the ordinary
+  `All players commit … face down.` sentence, which must be followed by `When they are ready, reveal.`
+  (an invalid option loses the game, as with any commitment). Options are matched exactly, capitals included.
+- **The rules** are read in order and the first that fits decides: a tie (`If all players committed the same option, it is a tie.` — nobody wins or loses), an
+  `If player N committed X and …, player N win and player N lose.` rule, or `Otherwise …`.
+  The results use the same `win` / `lose` as `You win the game.` (`draw` is left for cards.)
+  A `Contest` is a section of the ordinary parser — it can sit in an ability document or a card document,
+  its commit and reveal are the usual choice sentences, and a sentence above it can play it by name. A mistake
+  is reported on the word that caused it.
 - **After it**, `the winners` and `the losers` are the players the rules named
   (`Draw(the winners, 2).`, `… owned by the losers`).
+
+## Choosing, committing and voting
+
+Two verbs, and the difference is *when* the answers are seen:
+
+```
+Starting with you, each player chooses a card from their hand.            # open: round the table, each sees the earlier answers
+All players commit a card from their hand face down.  # sealed: all at once
+When they are ready, reveal.
+All players move the card they committed to their garbage.
+```
+
+`choose` happens in the open, one player after another from the caster.
+`commit` is placed face down by everyone at once and is checked at the reveal. An
+open choice between names **says who goes first**, by opening with an order:
+
+```
+Starting with you, each player chooses Attack or Retreat.
+Ending with you, each player chooses Attack or Retreat.
+Starting with a random player, each player chooses Attack or Retreat.
+In reverse order, each player chooses Attack or Retreat.
+```
+
+A choice between **names** is a vote, and `votes` counts it:
+
+```
+Starting with you, each player chooses Attack or Retreat.
+If votes for Attack = the highest vote, deal 10 damage to this.
+If votes for Attack > votes for Retreat, deal 5 damage to this.
+Deal the lowest vote damage to this.
+```
+
+`votes for <Option>` is that option's count; `the highest vote` and `the lowest
+vote` are the biggest and smallest count among the options (an option nobody chose
+counts 0). Ties are the rules text's to settle: `= the highest vote` is true for the
+winner **or any option tied with it**; `>` another option is a strict win. A sealed
+vote can only be counted after its reveal.
+
+**`each` is one at a time, `all` is all at once.** `Each player chooses …` goes round the
+table (so it says who goes first), and `All players commit …` is everyone together. The
+other sentences about every player — `All players move …`, `play`, `create`, and
+`all players'` / `all opponents'` for their zones — are simultaneous, with the base
+form of the verb.
 
 ## Creatures that effects make
 
 ```
-Creature Giant Golem 6/6
+Creature Giant Golem
+{ "type": "creature", "creatureConfig": { "power": 6, "health": 6 } }
 Taunt.
 
 Card Golem Gambit
-Cost 3
-Spell
+{ "cost": 3, "type": "spell" }
 You and target opponent play Rock Paper Scissors.
 The winners create a Giant Golem.
 ```
 
 `Creature <name> <power>/<health>` defines a creature that is not a card: it has no cost and is
-never in a deck. Its lines are a creature's (keywords, `When this dies then …`, the entry
-exceptions). `Create a Giant Golem.` (or `The winners create …`, `Each player creates …`) makes a
+never in a deck. Its lines are a creature's (keywords, `When this is destroyed then …`, the entry
+exceptions). `Create a Giant Golem.` (or `The winners create …`, `All players create …`) makes a
 new one in play under each named player's control, and it arrives like any creature, so the rules for
 entering play (summoning sickness) apply.
 
 ## Declaring a buff
 
 ```
-Buff <Name> [(<options>)]
-Buff Frailty (stacks)
-Buff Venom (weight 2, stacks)
-Buff Curse of Frailty
+Buff <Name>
+Weight 2.
+Fading 2.
+When the turn starts then deal 3 damage to this.
 ```
 
-Options (comma separated):
+A buff heading is just its name. Its properties are **keyword lines** under it:
 
-| Option | Means |
+| Keyword | Means |
 | --- | --- |
-| `stacks` | more than one instance may be attached |
-| `weight <n>` | status sort weight (defaults to `1`) |
-| `until end of turn` | the buff removes itself when the turn ends |
-| `for <n> turns` | it removes itself after that many turn-ends |
+| `Weight <n>.` | status sort weight (defaults to `1`) |
+| `Fading <n>.` | each instance starts with `n` counters; every turn end removes one, and an instance that cannot is destroyed |
 
-A duration is not an engine concept: it lowers to an ordinary triggered
-ability on the buff that takes the buff off. Each **instance** expires on
-its own, so every stack of a duration buff goes at the same turn's end
-rather than one stack per turn. A declared buff compiles to an engine `BuffDef`. A buff with **sentences of
+There is no `stacks` option: **every `Add` is its own instance**, and the
+order they were added in is kept — `(+1)(x2)(+1)` is not `(+1)(+1)(x2)`.
+
+`Fading` is not an engine concept: it lowers to an ordinary triggered
+ability on the buff. At each turn end the instance removes a counter, and
+**if it cannot remove one, it is destroyed** — so `Fading 0.` goes at the
+first turn end, and `Fading 1.` waits a full turn first. Each instance fades
+on its own counters.
+
+A declared buff compiles to an engine `BuffDef`. A buff with **sentences of
 its own** carries them as triggered abilities — one trigger per event the
 sentences fire on:
 
 ```
 Buff Regeneration
-When the turn starts, heal this character for 5.
+When a turn starts then heal this for 5.
 ```
 
-Accepted prefixes today are `When the turn starts,` and `When the turn
-ends,`. A buff sentence with **no** prefix defaults to `turn:start` —
-write the prefix explicitly rather than relying on that. Richer payloads
+Accepted prefixes today are `When a turn starts then` and `When the turn
+ends,`. A buff sentence with **no** prefix is an error. Richer payloads
 ("when it expires…", stat rewriting) arrive with the full trigger
 milestone.
 The language has no built-in buffs or characters. A host may supply content
@@ -634,7 +705,7 @@ just the trivial case of the same grammar:
 Deal (this.hp / 10) damage to target enemy character.
 Heal target ally character for (2 + 3).
 Incoming damage is reduced by (1 + 2).
-Outgoing damage has a (10 * stacks)% chance to be doubled.
+Outgoing damage has a (this.mana / 2)% chance to be doubled.
 Destroy all enemy characters with hp < (this.hp / 2).
 ```
 
@@ -674,10 +745,10 @@ when <count>? <subject> <verb> then <effect>.
 ```
 
 ```
-when 2 or more enemy characters die then deal 5 damage to all enemy characters.
-when a character dies then deal 3 damage to all ally characters.
+when 2 or more enemy characters are destroyed then deal 5 damage to all enemy characters.
+when a character is destroyed then deal 3 damage to all ally characters.
 when this survives then heal this for 5.
-when characters owned by the opponent with hp < 10 survive then Add Mark to all enemy characters.
+when characters owned by opponents with hp < 10 survives then Add Mark to all enemy characters.
 ```
 
 ### The subject is an ordinary character phrase
@@ -687,7 +758,7 @@ adjectives, `owned by`, and `with …` filters all apply to the
 **triggering** characters, deciding which of them count:
 
 ```
-when 2 or more enemy characters owned by the opponent with hp < 10 die then …
+when 2 or more enemy characters owned by opponents with hp < 10 are destroyed then …
       └ count ┘ └──────────────── subject ────────────────────┘ └verb┘
 ```
 
@@ -715,24 +786,24 @@ which is the only way a count is answerable at all.
 
 **Written order is not evaluation order.** The subject's filter runs first,
 per triggering character; the count then gates the *filtered* set. So "when
-2 or more enemy characters die" does not fire when two characters died but
+2 or more enemy characters are destroyed" does not fire when two characters died but
 only one was an enemy.
 
 ### Event verbs
 
 | Verb | Event | Singular |
 | --- | --- | --- |
-| `die` | `character:destroyed:batch` | `dies` |
-| `survive` | `character:survived:batch` — took damage in a batch and lived | `survives` |
-| `take damage` | `gauge:changed` on the life gauge, downward | `takes damage` |
+| `are destroyed` | `character:destroyed:batch` | `is destroyed` |
+| `survives` | `character:survived` (`:batch` with a count) — took damage and lived | (same word) |
+| `is damaged` | `gauge:changed` on the life gauge, downward | (same words) |
 | `are healed` | `gauge:changed` on the life gauge, upward | `is healed` |
 
 Damage is **not its own event** in this engine — it is the life gauge
-losing value (see `src/engine/events.ts`) — so `takes damage` is a gauge
+losing value (see `src/engine/events.ts`) — so `is damaged` is a gauge
 event plus a direction. Nothing else about it is special.
 
 As with `Deal`/`Heal` and a `damage`/`healing` modifier, the gauge is read
-from the triggering entity's own declaration, so `takes damage` fires on
+from the triggering entity's own declaration, so `is damaged` fires on
 `hp` for a fighter and on `loyalty` for something that declares that as
 its life. A loss on any *other* gauge is not damage and does not fire it.
 
@@ -760,8 +831,8 @@ when <count>? <subject> leaves <zone> [to <zone>]   then <effect>.
 Without the `from`/`to`, the trigger fires no matter what the other end
 was; that is the game-agnostic half, and it is why "enters play" does not
 require a game to name its paths. An article is allowed
-(`enters a garbage`), and the plural verb forms (`enter`, `leave`) match
-the counted subjects.
+(`enters a garbage`). `enters` and `leaves` are the only forms, for a
+single subject and a counted one alike (`2 or more characters enters play`).
 
 Zone names come from the **host**, exactly like buff names: the editor is
 handed a `ZoneDictionary` (`src/english/zone-dictionary.ts`) with the
@@ -776,11 +847,11 @@ event), and `:batch` gating.
 
 Two related readings are worth keeping distinct:
 
-- `when this dies` is `character:destroyed` — "destroyed by the rules".
+- `when this is destroyed` is `character:destroyed` — "destroyed by the rules".
 - `when this enters a garbage from play` is the same *mechanical* move,
   expressed in zones. A discard from hand reaches the garbage without
   dying, and a bounce leaves play without dying; the zone phrasing can say
-  all three precisely, while `dies` says only the first.
+  all three precisely, while `is destroyed` says only the first.
 
 ### `the source`
 
@@ -789,12 +860,16 @@ that dealt the damage, applied the buff, moved the card.
 
 ```
 Buff Thorns
-when this takes damage then deal 8 damage to the source.
+when this is damaged then deal 8 damage to the source.
 ```
 
 It is deliberately generic rather than `the attacker` — the same word works
 for every event, and a second noun meaning the same thing for one event
 kind would be a distinction with nothing behind it.
+
+`the source` takes no noun, like `this`: it is always the **character** that
+caused the event (`the source character` is an error, and a buff as a cause is
+not nameable yet).
 
 It resolves to **nobody** when nothing caused the event (a plain gauge
 write), when the cause was not a character (a buff's own ability), or when
@@ -814,12 +889,11 @@ what they appear to.
   `CompileResult.triggers` and the **host** decides which character carries
   it.
 
-A `Buff` may also use the turn prefix on an ordinary effect sentence, which
-is the older spelling and still works:
+A `Buff` may also use the turn prefix on an ordinary effect sentence:
 
 ```
 Buff Regeneration
-When the turn starts, heal this character for 5.
+When a turn starts then heal this for 5.
 ```
 
 ### Mind the loop
@@ -830,41 +904,56 @@ A trigger whose effect re-causes its own event fires again:
 when a character survives then deal 1 damage to all enemy characters.
 ```
 
-Damaging an enemy makes it survive, which triggers again. The engine's
+Damaging an enemy makes it survive (`survives`), which triggers again. The engine's
 depth guard stops it, but as an error — not a feature. Effects that write
 no gauge (`Add …`) cannot loop this way.
 
 ## Card documents
 
 The same language has a second document kind for the card game: sections
-headed `Card <name>` instead of `Ability <name>`. A card is a cost, a body,
-and its effect lines:
+headed `Card <name>` instead of `Ability <name>`. A card is a header (its data),
+and its effect lines (raw text):
 
 ```
 Card Fireball
-Cost 4
-Spell
+{ "cost": 4, "type": "spell" }
 Deal 6 damage to target enemy character.
 ```
 
 ```
 Card Elven Archer
-Cost 1
-Creature 1/1
+{ "cost": 1, "type": "creature", "creatureConfig": { "power": 1, "health": 1 } }
 When this enters play then Deal 1 damage to target enemy character.
 ```
 
-A card is a heading followed by **header lines** — `Cost <n>`, then exactly
-one of `Creature <power>/<health>` or `Spell` — and then its effect lines:
+A card is a heading followed by a **header** and then its effect lines. The header is a
+JSON object — the card's *data* — and everything after it is raw text in the language:
 
-| Line | Means |
+| Header field | Means |
 | --- | --- |
-| `Spell` + plain sentences | The spell's effect, exactly like an ability body. `target …` becomes the card's targeting; a sentence with no `target` phrase finds its own victims. |
-| `Creature <p>/<h>` | A minion's stat line. |
+| `"cost": <n>` | The mana the card costs. Required on a card. |
+| `"type": "spell" \| "creature"` | Required. |
+| `"creatureConfig": { "power": <n>, "health": <n> }` | Required for a creature, not allowed on a spell. Settings that belong to a kind of permanent live under a key of their own, so other kinds can add theirs. |
+
+The object may be on one line or spread over several. An unknown field, a missing `cost`
+or `type`, or a malformed object is reported on the key that caused it.
+
+A `Creature <name>` definition — a token that effects make, like `Giant Golem` — takes the
+same header without a `cost`:
+
+```
+Creature Giant Golem
+{ "type": "creature", "creatureConfig": { "power": 6, "health": 6 } }
+Taunt.
+```
+
+| Effect line | Means |
+| --- | --- |
+| plain sentences (on a spell) | The spell's effect, exactly like an ability body. `target …` becomes the card's targeting; a sentence with no `target` phrase finds its own victims. |
 | `Taunt.` / `Charge.` | A keyword. Creatures only. |
 | `When this enters play [from <zone>] then <effect>` | The creature's arrival effect. A **target-picking** effect is chosen as the card is played; one that picks nothing is a real zone trigger. |
-| `When this dies then <effect>` | A trigger on the creature's own destruction. |
-| `When … then …` | Any other standing trigger (`When this takes damage then …`, `When this enters a garbage from play then …`). |
+| `When this is destroyed then <effect>` | A trigger on the creature's own destruction. |
+| `When … then …` | Any other standing trigger (`When this is damaged then …`, `When this enters a garbage from play then …`). |
 
 **Events are named, not nicknamed.** There is no `Battlecry:`/`Deathrattle:`
 shorthand: a card says *when* something happens with the same `When … then …`

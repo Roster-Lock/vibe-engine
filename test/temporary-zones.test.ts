@@ -18,8 +18,7 @@ import { ZoneDictionary } from '../src/english/zone-dictionary.js';
 import type { ChoiceAnswer, ChoiceRequest } from '../src/engine/index.js';
 
 const FACT_OR_FICTION = `Card Fact or Fiction
-Cost 4
-Spell
+{ "cost": 4, "type": "spell" }
 Move the top 5 cards from your deck to the temporary zone Pool.
 Reveal all cards from Pool.
 Target opponent separates Pool into Fact and Fiction.
@@ -38,7 +37,7 @@ const lower = (text: string) =>
 
 describe('temporary zones — the language', () => {
   it('round-trips every sentence of Fact or Fiction', () => {
-    const source = `Ability FoF\n${FACT_OR_FICTION.split('\n').slice(3).join('\n')}`;
+    const source = `Ability FoF\n${FACT_OR_FICTION.split('\n').slice(2).join('\n')}`;
     const ir = lower(source);
     const { text, gaps } = renderDocument(ir);
     expect(gaps).toEqual([]);
@@ -120,7 +119,7 @@ describe('Fact or Fiction — playing it', () => {
     await game.collectUserDecisions();
     const a = game.sideOf(alice);
     const top = a.deck.cards.slice(0, 3);
-    const { cards } = playableCards('Card Park\nCost 1\nSpell\nMove the top 3 cards from your deck to the temporary zone Parking.');
+    const { cards } = playableCards('Card Park\n{ "cost": 1, "type": "spell" }\nMove the top 3 cards from your deck to the temporary zone Parking.');
     const spell = cards[0]!;
     if (spell.kind !== 'spell') throw new Error('spell');
     const actions = await spell.effect({ self: a.hero, engine: game.engine, side: a as never }, { targets: [] });

@@ -34,15 +34,15 @@ const KEYWORDS = [
   'With', 'Hp', 'Mana', 'And', 'Or',
   // Planned events vocabulary — the batch-event count phrase words
   // (BATCH_EVENT_COUNT_WORDS in src/english/vocabulary.ts) and the
-  // event verbs of the examples ("characters die", "characters survive").
+  // event verbs of the examples ("characters die", "a character survives").
   'One', 'More', 'Less', 'Die', 'Survive',
   // Lowercase forms — the editor does not force capitalization.
   'ability', 'buff', 'deal', 'heal', 'destroy', 'add', 'remove', 'you', 'all',
   'win', 'wins', 'lose', 'loses', 'target', 'this', 'other',
-  'enemy', 'ally', 'allied', 'character', 'characters', 'owned',
-  'opponent', 'players', 'the', 'game', 'to', 'from', 'for', 'by',
+  'enemy', 'ally', 'character', 'characters', 'owned',
+  'opponents', 'players', 'the', 'game', 'to', 'from', 'for', 'by',
   'with', 'hp', 'mana', 'and', 'or',
-  'one', 'more', 'less', 'die', 'survive',
+  'one', 'more', 'less', 'destroyed', 'survives',
 ];
 
 let registered = false;

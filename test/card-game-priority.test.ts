@@ -59,7 +59,7 @@ const deckOf = (card: Card, n = 30): Card[] => Array.from({ length: n }, () => c
 /** A 1-cost instant bolt, authored in English and marked instant in code. */
 function bolt(): Card {
   const { cards } = playableCards(
-    ['Card Test Bolt', 'Cost 1', 'Spell', 'Deal 3 damage to target enemy character.'].join('\n'),
+    ['Card Test Bolt', '{ "cost": 1, "type": "spell" }', 'Deal 3 damage to target enemy character.'].join('\n'),
   );
   return instant(cards[0]!);
 }
@@ -137,7 +137,7 @@ describe('the stack in the card game', () => {
     // The same card, unmarked: sorcery speed, so it cannot respond — and
     // cannot be cast at all on someone else's turn.
     const { cards } = playableCards(
-      ['Card Test Bolt', 'Cost 1', 'Spell', 'Deal 3 damage to target enemy character.'].join('\n'),
+      ['Card Test Bolt', '{ "cost": 1, "type": "spell" }', 'Deal 3 damage to target enemy character.'].join('\n'),
     );
     const slow = cards[0]!;
     const alice = new ScriptedCardPlayer('Alice', 'a', deckOf(bolt()));

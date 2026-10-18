@@ -94,9 +94,9 @@ console.log('  Alice is shown  ', handsSeenBy(alice.client));
 console.log('  Bob is shown    ', handsSeenBy(bob.client));
 
 const document = `Ability Showdown
-Each player commits a card from their hand face down.
+All players commit a card from their hand face down.
 When they are ready, reveal.
-Each player puts the card they committed into their garbage.`;
+All players move the card they committed to their garbage.`;
 const showdown = compileDocument(document, { zones: new ZoneDictionary(['hand']) }).abilities[0]!;
 console.log('\n' + document.split('\n').map((line) => `  | ${line}`).join('\n'));
 await showdown.cast({ self: players.alice!.characters[0]!, engine }, { targets: [] });

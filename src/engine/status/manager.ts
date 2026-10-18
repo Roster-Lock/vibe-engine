@@ -58,11 +58,11 @@ export class StatusManager {
   }
 
   /**
-   * Adds a buff instance to the sorted list. Returns `false` (and does
-   * nothing) when a non-stackable buff with the same id is already present.
+   * Adds a buff instance to the sorted list. Every add is its own instance —
+   * there is no stacking rule, because the order instances were added in can
+   * matter (`+1, x2, +1` is not `+1, +1, x2`).
    */
   addBuff(buff: Buff): boolean {
-    if (!buff.stacks && this.hasStatus(buff.id)) return false;
     this.insert(buff);
     return true;
   }
