@@ -455,7 +455,7 @@ export function compileDocument(text: string, options: CompileOptions = {}): Com
           check(comparison.other, comparison.span, new Set());
         }
       }
-      if (sentence.kind === 'deal' || sentence.kind === 'heal') check(sentence.amount, sentence.amountSpan, new Set());
+      if (sentence.kind === 'deal' || sentence.kind === 'heal' || sentence.kind === 'set' || sentence.kind === 'increaseMax') check(sentence.amount, sentence.amountSpan, new Set());
       if (sentence.kind === 'draw' || sentence.kind === 'scry') check(sentence.count, sentence.span, new Set());
       if (sentence.kind === 'store') {
         check(sentence.value, sentence.span, new Set());
@@ -504,7 +504,7 @@ export function compileDocument(text: string, options: CompileOptions = {}): Com
         if (clause?.kind !== 'value') continue;
         for (const comparison of clause.comparisons) out.push(comparison.value, comparison.other);
       }
-      if (sentence.kind === 'deal' || sentence.kind === 'heal') out.push(sentence.amount);
+      if (sentence.kind === 'deal' || sentence.kind === 'heal' || sentence.kind === 'set' || sentence.kind === 'increaseMax') out.push(sentence.amount);
       if (sentence.kind === 'store') out.push(sentence.value);
       if (sentence.kind === 'draw' || sentence.kind === 'scry') out.push(sentence.count);
       return out;
@@ -632,6 +632,8 @@ function canonicalizeBuffNames(doc: Doc, dictionary: BuffDictionary): Doc {
         return { ...sentence, buffName: canonical(sentence.buffName), chars: mapChars(sentence.chars) };
       case 'deal':
       case 'heal':
+      case 'set':
+      case 'increaseMax':
       case 'destroy':
         return { ...sentence, chars: mapChars(sentence.chars) };
       case 'roll':
@@ -718,6 +720,8 @@ function charsOf(sentence: Sentence): CharsPhrase | undefined {
   switch (sentence.kind) {
     case 'deal':
     case 'heal':
+    case 'set':
+    case 'increaseMax':
     case 'destroy':
     case 'addBuff':
     case 'removeBuff':

@@ -101,6 +101,8 @@ class Parser {
   readonly #gauges: ReadonlySet<string>;
   /** Whether a contest has been played yet in this document (`the winners` need one). */
   #contestPlayed = false;
+  /** True while reading the sentences of a `Rule` section. */
+  #inRule = false;
   #index = 0;
 
   constructor(text: string, options: ParseOptions = {}) {
@@ -139,6 +141,7 @@ class Parser {
       if (token.kind === 'word' && token.atLineStart && SECTION_WORDS.includes(token.lower as (typeof SECTION_WORDS)[number])) {
         seenHeading = true;
         currentZone = undefined;
+        this.#inRule = false;
         if (token.lower === 'contest') {
           // Already read ahead (so a sentence above it can play it); step over its body.
           const read = this.#contestSections.get(this.#index);
@@ -152,12 +155,13 @@ class Parser {
           currentBuff = undefined;
           continue;
         }
-        if (token.lower === 'zone') {
-          const section = this.#parseZoneHeading();
+        if (token.lower === 'zone' || token.lower === 'rule') {
+          const section = token.lower === 'rule' ? this.#parseRuleHeading() : this.#parseZoneHeading();
           if (section) {
             zones.push(section);
             currentZone = section;
           }
+          this.#inRule = currentZone?.rule !== undefined;
           currentAbility = undefined;
           currentBuff = undefined;
         } else if (token.lower === 'ability') {
@@ -335,7 +339,7 @@ class Parser {
       // `when <count> <subject> <verb> then <effect>.` — a trigger, not an
       // effect. A buff's triggers ride along on the buff; one written
       // outside any Buff belongs to no status, and the host places it.
-      if (token.kind === 'word' && token.lower === 'when' && this.#looksLikeTrigger()) {
+      if (token.kind === 'word' && token.lower === 'when' && !this.#inRule && this.#looksLikeTrigger()) {
         const trigger = this.#parseTriggerSentence();
         if (trigger) {
           if (currentBuff) currentBuff.triggers.push(trigger);
@@ -346,10 +350,27 @@ class Parser {
 
       // A sentence. Before any heading they collect into an implicit
       // "Untitled" ability; afterwards they must belong to an Ability or Buff.
+      if (currentZone?.rule !== undefined && token.kind === 'word' && token.lower === 'when' && this.#parseRuleBlock(currentZone)) continue;
       const sentence = this.#parseSentence();
       if (sentence) {
         // "Cards in this zone" belongs to a `Zone` section, and a `Zone` section holds nothing else.
         const aboutThisZone = sentence.kind === 'zoneAbility' && sentence.owners === 'this';
+        if (currentZone?.rule !== undefined) {
+          if (sentence.event !== undefined && (sentence.event.startsWith('turn:') || sentence.event === 'enters' || sentence.event === 'enters:yours')) {
+            currentZone.sentences.push(sentence);
+            currentZone.blocks!.push(0);
+          } else {
+            this.#diagnostics.push({
+              severity: 'error',
+              message:
+                'a rule says when it applies — start it with "When your turn starts then …" (or "… then { … }" for several steps) or "When a character owned by you enters play then …"',
+              code: 'rule-section-sentence',
+              start: sentence.span.start,
+              end: sentence.span.end,
+            });
+          }
+          continue;
+        }
         if (currentZone) {
           // A standing rule of the zone (`When your turn starts then …`) is about it too.
           if (aboutThisZone || (sentence.event !== undefined && sentence.event.startsWith('turn:'))) currentZone.sentences.push(sentence);
@@ -799,6 +820,132 @@ class Parser {
     };
   }
 
+  /** `Rule Mana` — the heading of a standing rule of the whole game. */
+  #parseRuleHeading(): ZoneSection | undefined {
+    const start = this.#advance(); // 'rule'
+    const nameTokens: Token[] = [];
+    while (this.#peek().kind === 'word' && !this.#peek().atLineStart) nameTokens.push(this.#advance());
+    if (nameTokens.length === 0) {
+      this.#fail(start, 'expected a rule name after "Rule", e.g. "Rule Mana"', 'syntax');
+      this.#skipToNextLine();
+      return undefined;
+    }
+    const first = nameTokens[0]!;
+    const last = nameTokens[nameTokens.length - 1]!;
+    return {
+      kind: 'zone',
+      span: { start: start.start, end: last.end },
+      zone: '',
+      rule: nameTokens.map((t) => t.text).join(' '),
+      nameSpan: { start: first.start, end: last.end },
+      sentences: [],
+      blocks: [],
+    };
+  }
+
+  #blockCount = 0;
+
+  /**
+   * `When your turn starts then { … }` — a rule's body in braces: sentences that run in order as one
+   * ability, and `If <condition> { … }` blocks whose condition is checked once for everything inside.
+   * Returns false (having consumed nothing) when the line is not the braced form.
+   */
+  #parseRuleBlock(section: ZoneSection): boolean {
+    const mark = this.#index;
+    const marked = this.#diagnostics.length;
+    const event = this.#parseEventPrefix();
+    if (event === undefined || !this.#peekPunct('{')) {
+      this.#index = mark;
+      this.#diagnostics.length = marked;
+      return false;
+    }
+    const open = this.#advance(); // '{'
+    let pending: string | undefined = event;
+    const add = (sentence: Sentence, block: number): void => {
+      section.sentences.push(pending !== undefined ? ({ ...sentence, event: pending } as Sentence) : sentence);
+      section.blocks!.push(block);
+      pending = undefined;
+    };
+    const statement = (guard?: IfClause): Sentence | undefined => {
+      const before = this.#index;
+      const sentence = this.#parseSentence();
+      if (this.#index === before) this.#advance(); // always make progress after an error
+      if (!sentence) return undefined;
+      if (sentence.event !== undefined) {
+        this.#diagnostics.push({
+          severity: 'error',
+          message: 'a "When" starts a rule — inside the braces, write the steps it runs',
+          code: 'rule-nested-when',
+          start: sentence.span.start,
+          end: sentence.span.end,
+        });
+        return undefined;
+      }
+      if (guard && sentence.guard) {
+        this.#diagnostics.push({
+          severity: 'error',
+          message: 'this step is already inside an "If { … }" — drop its own "If"',
+          code: 'rule-nested-if',
+          start: sentence.span.start,
+          end: sentence.span.end,
+        });
+        return undefined;
+      }
+      return guard ? ({ ...sentence, guard } as Sentence) : sentence;
+    };
+    let count = 0;
+    while (true) {
+      const token = this.#peek();
+      if (token.kind === 'eof') {
+        this.#fail(open, 'this "{" is never closed — end the rule with "}"', 'syntax');
+        break;
+      }
+      if (this.#peekPunct('}')) {
+        this.#advance();
+        break;
+      }
+      if (token.kind === 'word' && token.lower === 'if') {
+        const at = this.#index;
+        const kept = this.#diagnostics.length;
+        this.#advance();
+        const clause = this.#parseConditionClause(token);
+        if (clause && this.#peekPunct('{')) {
+          const brace = this.#advance();
+          this.#blockCount += 1;
+          const id = this.#blockCount;
+          let inside = 0;
+          while (true) {
+            if (this.#peek().kind === 'eof') {
+              this.#fail(brace, 'this "{" is never closed — end the block with "}"', 'syntax');
+              break;
+            }
+            if (this.#peekPunct('}')) {
+              this.#advance();
+              break;
+            }
+            const sentence = statement(clause);
+            if (sentence) {
+              add(sentence, id);
+              inside += 1;
+              count += 1;
+            }
+          }
+          if (inside === 0) this.#fail(brace, 'an "If" block with nothing in it', 'syntax');
+          continue;
+        }
+        this.#index = at;
+        this.#diagnostics.length = kept;
+      }
+      const sentence = statement();
+      if (sentence) {
+        add(sentence, 0);
+        count += 1;
+      }
+    }
+    if (count === 0) this.#fail(open, 'a rule with nothing in its braces', 'syntax');
+    return true;
+  }
+
   #parseBuffHeading(): BuffSection | undefined {
     const start = this.#advance(); // 'buff'
     const nameTokens: Token[] = [];
@@ -894,6 +1041,18 @@ class Parser {
             this.#failHere(`expected "then" — write "when ${t1.lower} turn ${t3!.lower} then …"`, 'syntax');
           }
           return t1.lower === 'your' ? `${ev}:yours` : ev;
+        }
+      }
+      // `when a character [owned by you] enters play then` — only a Rule section knows who "it" is.
+      if (this.#inRule && t1?.lower === 'a' && t2?.lower === 'character') {
+        const yours = t3?.lower === 'owned' && this.#peekOffset(4)?.lower === 'by' && this.#peekOffset(5)?.lower === 'you';
+        const at = yours ? 6 : 3;
+        if (this.#peekOffset(at)?.lower === 'enters' && this.#peekOffset(at + 1)?.lower === 'play') {
+          this.#index += at + 2;
+          if (!this.#matchWord('then')) {
+            this.#failHere('expected "then" — write "when a character owned by you enters play then …"', 'syntax');
+          }
+          return yours ? 'enters:yours' : 'enters';
         }
       }
       // `when the turn starts,` — retired.
@@ -1269,7 +1428,10 @@ class Parser {
       };
     } else if (
       next.kind === 'word' &&
-      (next.lower === 'any' || next.lower === 'every' || next.lower === 'this')
+      (next.lower === 'any' ||
+        next.lower === 'every' ||
+        // `this has hp < 10` is a condition on a character; `this.mana.max < 10` is a formula.
+        (next.lower === 'this' && !(this.#peek(1).kind === 'punct' && this.#peek(1).text === '.' && this.#adjacent(next, this.#peek(1)))))
     ) {
       const word = next.lower;
       this.#advance();
@@ -1791,6 +1953,12 @@ class Parser {
       case 'heal':
         sentence = this.#parseHeal();
         break;
+      case 'set':
+        sentence = this.#parseSet();
+        break;
+      case 'increase':
+        sentence = this.#parseIncreaseMax();
+        break;
       case 'destroy':
         sentence = this.#parseDestroy();
         break;
@@ -1977,6 +2145,76 @@ class Parser {
     return {
       kind: 'deal',
       span: { start: start.start, end },
+      amount: amount.value,
+      amountSpan: amount.span,
+      chars,
+    };
+  }
+
+  /** `Increase mana maximum of this by 1.` */
+  #parseIncreaseMax(): Sentence | undefined {
+    const start = this.#advance(); // 'increase'
+    const gaugeToken = this.#peek();
+    if (gaugeToken.kind !== 'word' || !this.#gauges.has(gaugeToken.lower)) {
+      this.#failHere(`expected a gauge — "Increase mana maximum of this by 1." The gauges are ${[...this.#gauges].join(', ')}`, 'syntax');
+      return this.#abort();
+    }
+    this.#advance();
+    if (!this.#matchWord('maximum')) {
+      this.#failHere('expected "maximum", e.g. "Increase mana maximum of this by 1."', 'syntax');
+      return this.#abort();
+    }
+    if (!this.#matchWord('of')) {
+      this.#failHere('expected "of", e.g. "Increase mana maximum of this by 1."', 'syntax');
+      return this.#abort();
+    }
+    const chars = this.#parseCharsPhrase();
+    if (!chars) return this.#abort();
+    if (!this.#matchWord('by')) {
+      this.#failHere('expected "by", e.g. "Increase mana maximum of this by 1."', 'syntax');
+      return this.#abort();
+    }
+    const amount = this.#expectAmount('after "by"', 'syntax');
+    if (!amount) return this.#abort();
+    const end = this.#expectSentenceEnd();
+    if (!end) return this.#abort();
+    return {
+      kind: 'increaseMax',
+      span: { start: start.start, end },
+      gauge: gaugeToken.lower,
+      amount: amount.value,
+      amountSpan: amount.span,
+      chars,
+    };
+  }
+
+  /** `Set mana of this to this.mana.max.` */
+  #parseSet(): Sentence | undefined {
+    const start = this.#advance(); // 'set'
+    const gaugeToken = this.#peek();
+    if (gaugeToken.kind !== 'word' || !this.#gauges.has(gaugeToken.lower)) {
+      this.#failHere(`expected a gauge to set — "Set mana of this to this.mana.max." The gauges are ${[...this.#gauges].join(', ')}`, 'syntax');
+      return this.#abort();
+    }
+    this.#advance();
+    if (!this.#matchWord('of')) {
+      this.#failHere('expected "of", e.g. "Set mana of this to this.mana.max."', 'syntax');
+      return this.#abort();
+    }
+    const chars = this.#parseCharsPhrase();
+    if (!chars) return this.#abort();
+    if (!this.#matchWord('to')) {
+      this.#failHere('expected "to", e.g. "Set mana of this to this.mana.max."', 'syntax');
+      return this.#abort();
+    }
+    const amount = this.#expectAmount('after "to"', 'syntax');
+    if (!amount) return this.#abort();
+    const end = this.#expectSentenceEnd();
+    if (!end) return this.#abort();
+    return {
+      kind: 'set',
+      span: { start: start.start, end },
+      gauge: gaugeToken.lower,
       amount: amount.value,
       amountSpan: amount.span,
       chars,
@@ -3542,6 +3780,19 @@ class Parser {
         kind: 'chars',
         span: { start: quantToken.start, end: this.#previous().end },
         quantifier: 'source',
+        other: false,
+        who: undefined,
+        owner: undefined,
+        withClause: undefined,
+      };
+    }
+    // `it` — the character a Rule section's `When a character enters play` is about.
+    if (this.#inRule && quantToken.kind === 'word' && quantToken.lower === 'it') {
+      this.#advance();
+      return {
+        kind: 'chars',
+        span: { start: quantToken.start, end: quantToken.end },
+        quantifier: 'it',
         other: false,
         who: undefined,
         owner: undefined,

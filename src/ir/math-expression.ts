@@ -33,6 +33,20 @@ export type MathExpression =
 export type MathContext = Readonly<Record<string, unknown>>;
 
 /**
+ * A gauge as a formula reads it: written alone (`this.mana`) it is the **current** value, and its
+ * other readings are named after it (`this.mana.max`, `this.mana.min`).
+ */
+export class GaugeReading {
+  constructor(
+    readonly current: number,
+    readonly max: number,
+    readonly min: number,
+  ) {}
+}
+
+const asNumber = (value: unknown): unknown => (value instanceof GaugeReading ? value.current : value);
+
+/**
  * The names a formula can start a path with because the *language* provides them
  * (`this.hp`, `count`, `roll.total`). Any other bare name in a formula is a
  * variable the author stored with "Store … as <Name>."
@@ -214,7 +228,7 @@ export function evaluateMathExpression(
   switch (expression.kind) {
     case 'number': return expression.value;
     case 'path': {
-      const value = resolvePath(context, expression.parts, context);
+      const value = asNumber(resolvePath(context, expression.parts, context));
       if (typeof value !== 'number') throw new Error(`math path does not resolve to a number: ${expression.parts.join('.')}`);
       return value;
     }
@@ -222,7 +236,7 @@ export function evaluateMathExpression(
     case 'sumArray': {
       const value = expression.expression.kind === 'path' ? resolvePath(context, expression.expression.parts, context) : evaluateMathExpression(expression.expression, context, hooks);
       if (!Array.isArray(value)) throw new Error('Σ(...) expects an array or array property');
-      return value.reduce((total, item) => total + (typeof item === 'number' ? item : 0), 0);
+      return value.reduce((total: number, item) => total + (typeof asNumber(item) === 'number' ? (asNumber(item) as number) : 0), 0);
     }
     case 'sum': {
       const start = Math.ceil(evaluateMathExpression(expression.start, context, hooks));

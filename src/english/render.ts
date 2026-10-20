@@ -286,7 +286,7 @@ class Renderer {
         if (query.role === 'source') {
           return query.sourceType === 'buff' ? this.#fail('a buff as the cause of an event', query) : 'the source';
         }
-        return this.#fail('an effect aimed at the triggering character itself', query);
+        return 'it';
       case 'all':
         return this.#all(query);
     }
@@ -474,11 +474,19 @@ class Renderer {
         const amount = this.#value(effect.amount);
         if (amount === undefined) return undefined;
         if (!isLifeGauge(effect.gauge)) {
+          if (effect.op === 'set') return `Set ${effect.gauge} of ${chars} to ${amount}.`;
           return this.#fail('damage moved on a named gauge (a block-view effect)', effect);
         }
         if (effect.op === 'subtract') return `Deal ${amount} damage to ${chars}.`;
         if (effect.op === 'add') return `Heal ${chars} for ${amount}.`;
         return this.#fail('a gauge set to a value (a block-view effect)', effect);
+      }
+      case 'gaugeMax': {
+        const chars = this.#query(effect.query, ability);
+        const amount = this.#value(effect.amount);
+        return chars === undefined || amount === undefined
+          ? undefined
+          : `Increase ${effect.gauge} maximum of ${chars} by ${amount}.`;
       }
       case 'destroy': {
         const chars = this.#query(effect.query, ability);
@@ -851,6 +859,33 @@ class Renderer {
     for (const ability of ir.abilities) blocks.push(this.#abilityLines(ability));
     for (const buff of ir.buffs) blocks.push(this.#buffLines(buff));
     for (const zone of ir.zones ?? []) {
+      if (zone.rule !== undefined) {
+        const prefix = (event: string, yours: boolean): string => {
+          if (event === 'enters') return yours ? 'When a character owned by you enters play' : 'When a character enters play';
+          const turn = event === 'turn:end' ? 'ends' : 'starts';
+          return yours ? `When your turn ${turn}` : `When a turn ${turn}`;
+        };
+        blocks.push([
+          `Rule ${zone.rule}`,
+          ...(zone.triggers ?? []).flatMap((trigger) => {
+            const head = `${prefix(trigger.event, trigger.yours)} then`;
+            const single = trigger.steps.length === 1 && trigger.steps[0]!.effects.length === 1;
+            if (single) return this.#stepLines(trigger.steps[0]!, undefined, true).map((line) => `${head} ${lowerFirst(line)}`);
+            const inside = trigger.steps.flatMap((step) => {
+              if (step.effects.length > 1 && step.when) {
+                const condition = this.#condition(step.when);
+                if (condition !== undefined) {
+                  const effects = step.effects.flatMap((effect) => this.#stepLines({ effects: [effect] }, undefined, true));
+                  return [`  If ${condition} {`, ...effects.map((line) => `    ${line}`), '  }'];
+                }
+              }
+              return this.#stepLines(step, undefined, true).map((line) => `  ${line}`);
+            });
+            return [`${head} {`, ...inside, '}'];
+          }),
+        ]);
+        continue;
+      }
       blocks.push([
         `Zone ${zone.zone}`,
         ...zone.steps.flatMap((step) => this.#stepLines(step, undefined, false)),

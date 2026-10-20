@@ -39,7 +39,7 @@ import {
   type GameEvent,
 } from '../src/games/turn-based/index.js';
 import { PLAY } from '../src/engine/index.js';
-import { GARBAGE } from '../src/games/cards/zones.js';
+import { GARBAGE } from '../src/engine/index.js';
 
 const tick = (ms = 5) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const settle = async (rounds = 6) => {

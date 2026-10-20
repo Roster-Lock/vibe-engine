@@ -178,8 +178,11 @@ export interface StateBasedRule {
   readonly priority?: number;
   /** The continuous condition, checked at each pass iteration. */
   readonly when: (engine: GameEngine) => boolean;
-  /** The actions to apply when the condition holds. */
-  readonly then: (engine: GameEngine) => Action[];
+  /**
+   * The actions to apply when the condition holds. May be async: a rule that has to *ask* something
+   * (run a rule card, say) before it knows the actions can wait for the answer.
+   */
+  readonly then: (engine: GameEngine) => Action[] | Promise<Action[]>;
 }
 
 /* ----------------------------- engine ------------------------------- */
@@ -1437,7 +1440,7 @@ export class GameEngine {
         const before = this.#stateVersion;
         for (const rule of this.#sbaRules) {
           if (!rule.when(this)) continue;
-          const actions = rule.then(this);
+          const actions = await rule.then(this);
           if (actions.length === 0) continue;
           await this.apply(actions);
         }

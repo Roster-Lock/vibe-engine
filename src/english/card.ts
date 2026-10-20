@@ -82,7 +82,7 @@ import { emptyZoneDictionary, ZoneDictionary } from './zone-dictionary.js';
 
 /* ------------------------------- the shapes ------------------------------ */
 
-export type CardKind = 'creature' | 'spell';
+export type CardKind = 'creature' | 'spell' | 'rule';
 
 /**
  * Exceptions to the standing "a creature cannot act the turn it enters play" rule, as a
@@ -175,6 +175,12 @@ export interface CompiledCard {
   readonly targeting?: TargetPattern;
   /** Triggers the creature carries in play (`When this is destroyed then …`, …). */
   readonly triggers: readonly AnyTriggeredAbility[];
+  /**
+   * A `"type": "rule"` card: a standing rule of the game, in no zone. The host gives a copy to each
+   * player and runs it at its event — `trigger('turn:start', engine, turnOwner, [], owner)`, or
+   * `trigger('enters', engine, turnOwner, [creature], owner)` — and "you" is that owner.
+   */
+  readonly rule?: ZoneBinding;
   /** Printed rules text — the card's effect lines, for the card face. */
   readonly rulesText: string;
   /** The card's compiled IR — the share format, produced even with errors. */
@@ -225,6 +231,8 @@ interface SourceLine {
   readonly contentEnd: number;
   /** 1-based line number. */
   readonly number: number;
+  /** For a line a keyword expanded into: the text it means, in place of the invocation line's own text. */
+  readonly expansion?: string;
   /** True for a line the splitter made from the JSON header — the only place `Cost`/`Spell`/`Creature p/h` are read. */
   readonly generated?: true;
 }
@@ -251,6 +259,7 @@ function sourceLines(text: string): SourceLine[] {
 
 /** The line's meaningful text (no leading/trailing whitespace). */
 function lineText(line: SourceLine): string {
+  if (line.expansion !== undefined) return line.expansion;
   return line.text.slice(line.contentStart - line.start, line.contentEnd - line.start);
 }
 
@@ -301,7 +310,28 @@ interface BuffSectionSrc {
   readonly lines: SourceLine[];
 }
 
-type Section = CardSection | BuffSectionSrc | ZoneSectionSrc | ContestSectionSrc;
+/**
+ * `Keyword Drain` + lines: a word the document defines. The lines are raw language text that the keyword
+ * means, with its parameters written where the arguments go — they are also its explanation, so there is no
+ * summary to write. A JSON header is optional, for the data a keyword has beyond its lines: what it takes
+ * and which cards may carry it.
+ */
+interface KeywordSectionSrc {
+  readonly kind: 'keyword';
+  readonly heading: SourceLine;
+  readonly name: string;
+  readonly nameSpan: Span;
+  readonly lines: SourceLine[];
+  headerSpan?: Span;
+  header?: KeywordHeader;
+}
+
+interface KeywordHeader {
+  readonly parameters: readonly string[];
+  readonly cardKinds?: readonly Exclude<CardKind, 'rule'>[];
+}
+
+type Section = CardSection | BuffSectionSrc | ZoneSectionSrc | ContestSectionSrc | KeywordSectionSrc;
 
 interface SplitResult {
   readonly sections: Section[];
@@ -309,6 +339,7 @@ interface SplitResult {
   readonly buffs: BuffSectionSrc[];
   readonly zoneSections: ZoneSectionSrc[];
   readonly contestSections: ContestSectionSrc[];
+  readonly keywordSections: KeywordSectionSrc[];
   readonly diagnostics: Diagnostic[];
 }
 
@@ -330,7 +361,8 @@ function headingName(line: SourceLine, keyword: string, stopAtParens: boolean): 
 
 /* ------------------------------ the JSON header --------------------------- */
 
-const HEADER_SHAPE_CARD = '{ "cost": 3, "type": "spell" } or { "cost": 2, "type": "creature", "creatureConfig": { "power": 2, "health": 3 } }';
+const HEADER_SHAPE_CARD =
+  '{ "cost": 3, "type": "spell" }, { "cost": 2, "type": "creature", "creatureConfig": { "power": 2, "health": 3 } } or { "type": "rule" }';
 const HEADER_SHAPE_TOKEN = '{ "type": "creature", "creatureConfig": { "power": 6, "health": 6 } }';
 
 /**
@@ -395,7 +427,8 @@ function headerLines(
   }
   const object = value as Record<string, unknown>;
   let ok = true;
-  const known = token ? ['type', 'creatureConfig'] : ['cost', 'type', 'creatureConfig'];
+  const isRule = !token && object['type'] === 'rule';
+  const known = token ? ['type', 'creatureConfig'] : isRule ? ['type'] : ['cost', 'type', 'creatureConfig'];
   for (const key of Object.keys(object)) {
     if (!known.includes(key)) {
       fail(`"${key}" is not a header field — the fields are ${known.map((k) => `"${k}"`).join(', ')}`, 'card-header-field', keySpan(key));
@@ -404,15 +437,15 @@ function headerLines(
   }
   const whole0 = (n: unknown): n is number => typeof n === 'number' && Number.isInteger(n) && n >= 0;
   let cost = 0;
-  if (!token) {
+  if (!token && !isRule) {
     if (!whole0(object['cost'])) {
       fail('"cost" is the mana the card costs — a whole number, e.g. "cost": 3', 'card-cost-missing', 'cost' in object ? keySpan('cost') : whole);
       ok = false;
     } else cost = object['cost'];
   }
   const type = token ? (object['type'] ?? 'creature') : object['type'];
-  if (type !== 'spell' && type !== 'creature') {
-    fail('"type" is "spell" or "creature", e.g. "type": "spell"', 'card-kind-missing', 'type' in object ? keySpan('type') : whole);
+  if (type !== 'spell' && type !== 'creature' && type !== 'rule') {
+    fail('"type" is "spell", "creature" or "rule", e.g. "type": "spell"', 'card-kind-missing', 'type' in object ? keySpan('type') : whole);
     ok = false;
   }
   if (token && type === 'spell') {
@@ -457,7 +490,70 @@ function headerLines(
     number: first.number,
     generated: true,
   });
+  // A rule is a standing rule of the game, not something played: it has no cost.
+  if (type === 'rule') return [generated('Rule')];
   return [generated(`Cost ${cost}`), generated(type === 'creature' ? `Creature ${power}/${health}` : 'Spell')];
+}
+
+/* --------------------------- a keyword's header --------------------------- */
+
+const KEYWORD_HEADER_SHAPE = '{ "parameters": ["amount"], "cardKinds": ["spell"] }';
+
+/**
+ * Reads a keyword's optional JSON header — `{ "parameters": ["amount"], "cardKinds": ["spell"] }` — and
+ * reports what is wrong with it on the key that caused it.
+ */
+function keywordHeader(raw: string, base: number, push: (diagnostic: Diagnostic) => void): KeywordHeader | undefined {
+  const whole: Span = { start: base, end: base + raw.length };
+  const fail = (message: string, code: string, at: Span = whole): void =>
+    push({ severity: 'error', message, code, start: at.start, end: Math.max(at.end, at.start + 1) });
+  const keySpan = (key: string): Span => {
+    const at = raw.indexOf(`"${key}"`);
+    return at === -1 ? whole : { start: base + at, end: base + at + key.length + 2 };
+  };
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch (error) {
+    fail(`the header is not valid JSON (${(error as Error).message}) — write ${KEYWORD_HEADER_SHAPE}`, 'keyword-header-json');
+    return undefined;
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    fail(`the header is an object — write ${KEYWORD_HEADER_SHAPE}`, 'keyword-header-json');
+    return undefined;
+  }
+  const object = value as Record<string, unknown>;
+  let ok = true;
+  for (const key of Object.keys(object)) {
+    if (!['parameters', 'cardKinds'].includes(key)) {
+      fail(
+        key === 'summary'
+          ? '"summary" is not a field — the lines under the keyword are its explanation, and a player reads them on hover'
+          : `"${key}" is not a keyword header field — the fields are "parameters" and "cardKinds"`,
+        'keyword-header-field',
+        keySpan(key),
+      );
+      ok = false;
+    }
+  }
+  const parameters = object['parameters'] ?? [];
+  if (!Array.isArray(parameters) || !parameters.every((p) => typeof p === 'string' && /^[A-Za-z][A-Za-z0-9]*$/.test(p))) {
+    fail('"parameters" is a list of names, e.g. "parameters": ["amount"] — each is written in the lines where its argument goes', 'keyword-parameters', keySpan('parameters'));
+    ok = false;
+  } else if (new Set(parameters.map((p) => (p as string).toLowerCase())).size !== parameters.length) {
+    fail('each parameter has its own name', 'keyword-parameters', keySpan('parameters'));
+    ok = false;
+  }
+  let cardKinds: Exclude<CardKind, 'rule'>[] | undefined;
+  if ('cardKinds' in object) {
+    const kinds = object['cardKinds'];
+    if (!Array.isArray(kinds) || kinds.length === 0 || !kinds.every((k) => k === 'creature' || k === 'spell')) {
+      fail('"cardKinds" lists "creature" and/or "spell", e.g. "cardKinds": ["spell"]', 'keyword-card-kinds', keySpan('cardKinds'));
+      ok = false;
+    } else cardKinds = [...new Set(kinds as Exclude<CardKind, 'rule'>[])];
+  }
+  if (!ok) return undefined;
+  return { parameters: parameters as string[], ...(cardKinds ? { cardKinds } : {}) };
 }
 
 function splitSections(text: string): SplitResult {
@@ -498,6 +594,16 @@ function splitSections(text: string): SplitResult {
       current = section;
       continue;
     }
+    // A keyword's JSON header: the first thing under its heading.
+    if (current?.kind === 'keyword' && current.lines.length === 0 && current.headerSpan === undefined && content.startsWith('{')) {
+      const endIndex = headerEnd(lines, lineIndex);
+      const last = lines[endIndex]!;
+      current.headerSpan = { start: line.contentStart, end: last.contentEnd };
+      const header = keywordHeader(text.slice(line.contentStart, last.contentEnd), line.contentStart, (d) => diagnostics.push(d));
+      if (header) current.header = header;
+      lineIndex = endIndex;
+      continue;
+    }
     // The JSON header: the first thing under a card's heading.
     if (current?.kind === 'card' && current.lines.length === 0 && current.headerSpan === undefined && content.startsWith('{')) {
       const endIndex = headerEnd(lines, lineIndex);
@@ -506,6 +612,22 @@ function splitSections(text: string): SplitResult {
       current.headerSpan = { start: line.contentStart, end: last.contentEnd };
       current.lines.push(...headerLines(raw, line.contentStart, current.token === true, line, last, (d) => diagnostics.push(d)));
       lineIndex = endIndex;
+      continue;
+    }
+    if (/^keyword\b/i.test(content)) {
+      const { name, span } = headingName(line, 'Keyword', false);
+      const section: KeywordSectionSrc = { kind: 'keyword', heading: line, name, nameSpan: span, lines: [] };
+      sections.push(section);
+      current = section;
+      if (!/^[A-Za-z][A-Za-z-]*$/.test(name)) {
+        diagnostics.push({
+          severity: 'error',
+          message: 'a keyword is one word — write "Keyword <name>", e.g. "Keyword Drain"',
+          code: 'keyword-name',
+          start: line.contentStart,
+          end: line.contentEnd,
+        });
+      }
       continue;
     }
     if (/^contest\b/i.test(content)) {
@@ -611,7 +733,8 @@ function splitSections(text: string): SplitResult {
   const buffs = sections.filter((s): s is BuffSectionSrc => s.kind === 'buff');
   const zoneSections = sections.filter((s): s is ZoneSectionSrc => s.kind === 'zone');
   const contestSections = sections.filter((s): s is ContestSectionSrc => s.kind === 'contest');
-  return { sections, cards, buffs, zoneSections, contestSections, diagnostics };
+  const keywordSections = sections.filter((s): s is KeywordSectionSrc => s.kind === 'keyword');
+  return { sections, cards, buffs, zoneSections, contestSections, keywordSections, diagnostics };
 }
 
 /* ---------------------- synthetic document + line map -------------------- */
@@ -687,6 +810,7 @@ type LineClass =
   | { readonly kind: 'cost'; readonly value: number }
   | { readonly kind: 'creature'; readonly power: number; readonly health: number }
   | { readonly kind: 'spell' }
+  | { readonly kind: 'rule' }
   | { readonly kind: 'entry'; readonly rules: EntryRules }
   | { readonly kind: 'cardAbility'; readonly name: string; readonly body: string; readonly bodyStart: number }
   | { readonly kind: 'keyword'; readonly keyword: CardKeyword }
@@ -772,6 +896,7 @@ function classify(
       : { kind: 'unknown' };
   }
   if (/^spell\s*\.?\s*$/.test(lower)) return line.generated ? { kind: 'spell' } : { kind: 'unknown' };
+  if (/^rule\s*\.?\s*$/.test(lower)) return line.generated ? { kind: 'rule' } : { kind: 'unknown' };
   const entry = parseEntryRule(content);
   if (entry) return { kind: 'entry', rules: entry };
   // `Suspend: Move this card to the Suspend zone with 5 counters on it.` — an ability the card has in hand.
@@ -910,6 +1035,14 @@ function parseCard(section: CardSection, registry: KeywordRegistry): CardParse {
           kind = 'spell';
         }
         break;
+      case 'rule':
+        if (sawKindLine) {
+          fail(line, `"${section.name}" already says it is a ${kind}`, 'card-kind-duplicate');
+          break;
+        }
+        sawKindLine = line;
+        kind = 'rule';
+        break;
       case 'cardAbility':
         cardAbilities.push({ name: cls.name, body: cls.body, bodyStart: cls.bodyStart, line });
         text.push(lineText(line));
@@ -924,10 +1057,11 @@ function parseCard(section: CardSection, registry: KeywordRegistry): CardParse {
         keywordLines.push(line);
         text.push(cls.keyword === 'taunt' ? 'Taunt.' : 'Charge.');
         break;
-      case 'registered':
+      case 'registered': {
         registered.push({ line, cls });
         keywordLines.push(line);
         text.push(lineText(line).replace(/\s+$/, ''));
+        const problemsBefore = diagnostics.length;
         // Arguments a keyword cannot read are a write error, not something to
         // ignore: `Charge(2).` quietly behaving like `Charge.` would hide a
         // mechanic the author believes exists.
@@ -963,7 +1097,22 @@ function parseCard(section: CardSection, registry: KeywordRegistry): CardParse {
             'card-keyword-arity',
           );
         }
+        // A keyword that means some lines of the language is those lines: they join the card's own, so
+        // every rule about a card's effects applies to them, and a mistake is reported on the keyword.
+        const def = cls.invocation.def;
+        if (diagnostics.length === problemsBefore && def.parse !== undefined) {
+          for (const piece of def.parse(cls.invocation.args)) {
+            const expanded: SourceLine = { ...line, expansion: piece.text };
+            const meaning = classify(expanded, registry, line.contentStart);
+            if (meaning.kind === 'effect' || meaning.kind === 'trigger' || meaning.kind === 'entersPlay') {
+              effectLines.push({ line: expanded, cls: meaning });
+            } else {
+              fail(line, `"${def.name}" stands for "${piece.text}", which is not an effect line`, 'card-keyword-expansion');
+            }
+          }
+        }
         break;
+      }
       case 'entersPlay':
       case 'trigger':
       case 'effect':
@@ -1035,6 +1184,22 @@ function parseCard(section: CardSection, registry: KeywordRegistry): CardParse {
         'card-spell-empty',
       );
     }
+  } else if (kind === 'rule') {
+    for (const line of [...entryLines, ...keywordLines]) {
+      fail(line, 'a rule is not a creature — it has no keywords and no turn it enters play', 'card-rule-line');
+    }
+    // Lines between a "{" and its "}" are the steps of the rule above them.
+    let depth = 0;
+    for (const { line, cls } of effectLines) {
+      const text = lineText(line);
+      const inside = depth > 0;
+      depth = Math.max(0, depth + (text.match(/\{/g)?.length ?? 0) - (text.match(/\}/g)?.length ?? 0));
+      if (cls.kind === 'trigger' || cls.kind === 'entersPlay' || inside) continue;
+      fail(line, `a rule says when it applies — write "When your turn starts then ${text}"`, 'card-rule-bare');
+    }
+    if (effectLines.length === 0) {
+      fail(section.heading, `"${section.name}" is a rule with nothing to say — add "When a turn starts then …"`, 'card-rule-empty');
+    }
   } else if (kind === 'creature') {
     for (const { line, cls } of effectLines) {
       if (cls.kind === 'entersPlay') {
@@ -1073,7 +1238,7 @@ function parseCard(section: CardSection, registry: KeywordRegistry): CardParse {
 
 /** Whether a keyword may appear on a card of this kind. */
 function allowsKind(def: KeywordDef, kind: CardKind | undefined): boolean {
-  if (kind === undefined) return true;
+  if (kind === undefined || kind === 'rule') return true;
   return (def.cardKinds ?? ['creature']).includes(kind);
 }
 
@@ -1082,6 +1247,8 @@ function picksTarget(sentence: Sentence): boolean {
   switch (sentence.kind) {
     case 'deal':
     case 'heal':
+    case 'set':
+    case 'increaseMax':
     case 'destroy':
     case 'addBuff':
     case 'removeBuff':
@@ -1153,6 +1320,13 @@ export function compileCardDocument(text: string, options: CardCompileOptions = 
   const creatureNames = split.cards.filter((section) => section.token).map((section) => section.name);
   options = { ...options, zones: declaredZones, contests, creatures: [...(options.creatures ?? []), ...creatureNames] };
 
+  // Keywords the document defines (`Keyword Drain`) join the registry, so a card can use them like `Taunt.`
+  for (const def of keywordDefsOf(split.keywordSections, keywords, options, hostDictionary, push)) keywords.add(def);
+
+  // Read every card once up front: a `"type": "rule"` card is compiled with the library below.
+  const parsedCards = new Map(split.cards.map((section) => [section, parseCard(section, keywords)] as const));
+  const ruleCards = split.cards.filter((section) => parsedCards.get(section)!.kind === 'rule');
+
   // Declared buffs are document-level: compile them once as a library, so a
   // buff's body is checked in one place and its `BuffDef` is built once.
   const libraryLines: SynthLine[] = [
@@ -1174,15 +1348,30 @@ export function compileCardDocument(text: string, options: CardCompileOptions = 
       },
       ...section.lines.map(verbatim),
     ]),
+    // A rule card is a `Rule` section: its lines say when it applies, and what then happens.
+    ...ruleCards.flatMap((section) => [
+      {
+        text: `Rule ${section.name}`,
+        origin: {
+          contentStart: section.heading.contentStart,
+          contentEnd: section.heading.contentEnd,
+          synthPrefix: 0,
+          wholeSpan: { start: section.heading.contentStart, end: section.heading.contentEnd },
+        },
+      },
+      ...parsedCards.get(section)!.effectLines.map(({ line }) => verbatim(line)),
+    ]),
   ];
   let buffDefs: readonly BuffDef[] = [];
   let zoneBindings: readonly ZoneBinding[] = [];
+  const ruleBindings = new Map<string, ZoneBinding>();
   const used = new Set<string>();
-  if (split.buffs.length > 0 || split.zoneSections.length > 0) {
+  if (split.buffs.length > 0 || split.zoneSections.length > 0 || ruleCards.length > 0) {
     const library = buildSynthetic(libraryLines, text.length);
     const compiled = compileDocument(library.text, { ...options, dictionary: hostDictionary });
     buffDefs = compiled.buffs;
-    zoneBindings = compiled.zones;
+    zoneBindings = compiled.zones.filter((binding) => binding.rule === undefined);
+    for (const binding of compiled.zones) if (binding.rule !== undefined) ruleBindings.set(binding.rule, binding);
     collectBuffReferences(compiled.doc, used);
     for (const diagnostic of compiled.diagnostics) {
       // Unused-buff is answered below, from the whole document at once.
@@ -1196,8 +1385,26 @@ export function compileCardDocument(text: string, options: CardCompileOptions = 
   const cards: CompiledCard[] = [];
   const zones = declaredZones;
   for (const section of split.cards) {
-    const parsed = parseCard(section, keywords);
+    const parsed = parsedCards.get(section)!;
     for (const diagnostic of parsed.diagnostics) push(diagnostic);
+
+    if (parsed.kind === 'rule') {
+      const binding = ruleBindings.get(section.name);
+      cards.push({
+        id: slug(section.name),
+        name: section.name,
+        cost: 0,
+        kind: 'rule',
+        keywords: [],
+        handAbilities: [],
+        triggers: [],
+        ...(binding ? { rule: binding } : {}),
+        rulesText: parsed.rulesText,
+        headingSpan: { start: section.heading.contentStart, end: section.heading.contentEnd },
+        nameSpan: section.nameSpan,
+      });
+      continue;
+    }
 
     // How each arrival effect compiles — see `arrivalLine`.
     const arrivalLines: SynthLine[] = [];
@@ -1247,7 +1454,11 @@ export function compileCardDocument(text: string, options: CardCompileOptions = 
       entersFrom ??= cls.origin;
       arrivalLines.push({
         text: cls.body,
-        origin: { contentStart: cls.bodyStart, contentEnd: line.contentEnd, synthPrefix: 0 },
+        origin: {
+          contentStart: line.expansion !== undefined ? line.contentStart : cls.bodyStart,
+          contentEnd: line.contentEnd,
+          synthPrefix: 0,
+        },
       });
     }
 
@@ -1334,6 +1545,110 @@ export function compileCardDocument(text: string, options: CardCompileOptions = 
   };
 }
 
+/* ------------------------- keywords the document defines ------------------------ */
+
+/** A keyword with no header: it takes nothing, and its kind follows from its lines. */
+const NO_KEYWORD_HEADER: KeywordHeader = { parameters: [] };
+
+/** The text a keyword means, with each parameter replaced by the argument written for it. */
+function expandKeyword(lines: readonly string[], parameters: readonly string[], args: readonly string[]): string[] {
+  if (parameters.length === 0) return [...lines];
+  const pattern = new RegExp(`\\b(${parameters.join('|')})\\b`, 'gi');
+  return lines.map((line) =>
+    line.replace(pattern, (word) => {
+      const index = parameters.findIndex((parameter) => parameter.toLowerCase() === word.toLowerCase());
+      return (args[index] ?? word).trim();
+    }),
+  );
+}
+
+/**
+ * The keywords a document defines (`Keyword Drain`), as registry entries. A keyword is a name for some lines of
+ * the language: using it (`Drain(3).`) means those lines, with the arguments written where the parameters are.
+ * So it needs no code — and a mistake in the lines is reported where the keyword is *defined*, once.
+ */
+function keywordDefsOf(
+  sections: readonly KeywordSectionSrc[],
+  known: KeywordRegistry,
+  options: CardCompileOptions,
+  hostDictionary: BuffDictionary,
+  push: (diagnostic: Diagnostic) => void,
+): KeywordDef[] {
+  const defs: KeywordDef[] = [];
+  const names = new Set<string>();
+  for (const section of sections) {
+    const header = section.header ?? NO_KEYWORD_HEADER;
+    if (section.headerSpan !== undefined && !section.header) continue; // a broken header is reported already
+    if (!/^[A-Za-z][A-Za-z-]*$/.test(section.name)) continue;
+    const fail = (span: Span, message: string, code: string): void =>
+      push({ severity: 'error', message, code, start: span.start, end: Math.max(span.end, span.start + 1) });
+    if (known.has(section.name) || names.has(section.name.toLowerCase())) {
+      fail(section.nameSpan, `"${section.name}" is already a keyword — pick another name`, 'keyword-duplicate');
+      continue;
+    }
+    const lines = section.lines.map(lineText);
+    if (lines.length === 0) {
+      fail(section.nameSpan, `"${section.name}" means nothing yet — add the lines it stands for, e.g. "Deal amount damage to target enemy character."`, 'keyword-empty');
+      continue;
+    }
+    // Check the lines once, with each parameter standing for a number, so a typo is found here and not
+    // on the first card that uses the keyword.
+    const sample = expandKeyword(lines, header.parameters, header.parameters.map(() => '1'));
+    const kinds = header.cardKinds ?? (lines.some((line) => /^when\b/i.test(line)) ? (['creature'] as const) : (['spell'] as const));
+    const body = compileDocument(`Ability ${section.name}\n${sample.join('\n')}`, { ...options, dictionary: hostDictionary });
+    let ok = true;
+    for (const diagnostic of body.diagnostics) {
+      if (diagnostic.severity !== 'error') continue;
+      // The sample has the heading on its first line, so the diagnostic's line is one less than the lines it has seen.
+      const sampleText = `Ability ${section.name}\n${sample.join('\n')}`;
+      const lineIndex = Math.min(lines.length - 1, Math.max(0, sampleText.slice(0, diagnostic.start).split('\n').length - 2));
+      const at = section.lines[lineIndex]!;
+      fail({ start: at.contentStart, end: at.contentEnd }, `${diagnostic.message} (in "${section.name}")`, 'keyword-body');
+      ok = false;
+    }
+    if (!ok) continue;
+    names.add(section.name.toLowerCase());
+    defs.push(keywordDefFrom(section, header, lines, kinds));
+  }
+  return defs;
+}
+
+/**
+ * The keywords a document defines, as registry entries — without checking their lines. For a surface that only
+ * needs to *explain* them (an editor's hover) while the document is still half-written.
+ */
+export function documentKeywords(text: string): KeywordDef[] {
+  const defs: KeywordDef[] = [];
+  for (const section of splitSections(text).keywordSections) {
+    if ((section.headerSpan !== undefined && !section.header) || !/^[A-Za-z][A-Za-z-]*$/.test(section.name)) continue;
+    const header = section.header ?? NO_KEYWORD_HEADER;
+    const lines = section.lines.map(lineText);
+    if (lines.length === 0) continue;
+    const kinds = header.cardKinds ?? (lines.some((line) => /^when\b/i.test(line)) ? (['creature'] as const) : (['spell'] as const));
+    defs.push(keywordDefFrom(section, header, lines, kinds));
+  }
+  return defs;
+}
+
+/** The registry entry for a keyword section: its words on hover, and what using it means. */
+function keywordDefFrom(
+  section: Pick<KeywordSectionSrc, 'name'>,
+  header: KeywordHeader,
+  lines: readonly string[],
+  kinds: readonly Exclude<CardKind, 'rule'>[],
+): KeywordDef {
+  const signature = header.parameters.length > 0 ? `${section.name}(${header.parameters.join(', ')})` : `${section.name}.`;
+  // The lines are the explanation: what a player reads on hover is what the keyword says.
+  return {
+    name: section.name,
+    summary: lines.join(' '),
+    details: `\`${signature}\` means:\n${lines.map((line) => `- ${line}`).join('\n')}`,
+    cardKinds: [...kinds],
+    ...(header.parameters.length > 0 ? { arity: [header.parameters.length, header.parameters.length] as const } : {}),
+    parse: (args) => expandKeyword(lines, header.parameters, args).map((text) => ({ text })),
+  };
+}
+
 /* -------------------------------- helpers -------------------------------- */
 
 /**
@@ -1381,6 +1696,8 @@ function collectBuffReferences(doc: Doc, into: Set<string>): void {
         break;
       case 'deal':
       case 'heal':
+      case 'set':
+      case 'increaseMax':
       case 'destroy':
         visitChars(sentence.chars);
         break;
@@ -1448,6 +1765,7 @@ export const CARD_WORD_DOCS: Readonly<Record<string, string>> = {
   cost: '`"cost": <n>` — in the card\'s JSON header: the mana the card costs to play. Required.',
   creature: '`"type": "creature"` with `"creatureConfig": { "power": 3, "health": 2 }` — a minion with a stat line. Settings that belong to a kind of permanent live under their own key.',
   spell: '`"type": "spell"` — a one-shot card. Its effect sentences are written plainly, without a prefix.',
+  rule: '`"type": "rule"` — a standing rule of the game: no cost, never played; every player has their own copy. Every rule says when it applies: `When your turn starts then …`, `When a character owned by you enters play then …` (`it` is that character). Several steps go in braces: `When your turn starts then { … }`.',
   // Derived from the registered keywords, so the wording lives in one place
   // (`src/english/glossary.ts`).
   taunt: BUILTIN_KEYWORDS.find((def) => def.name === 'Taunt')!.details!,
@@ -1456,6 +1774,9 @@ export const CARD_WORD_DOCS: Readonly<Record<string, string>> = {
   enters: '`When this enters play then <effect>.` — the creature\'s effect the moment it lands. It may pick a target, exactly like an ability.',
   play: '`enters play` — the moment the creature is put onto the board.',
   destroyed: '`When this is destroyed then <effect>.` — the creature\'s last words, a trigger on `character:destroyed`.',
+  keyword: '`Keyword <name>` defines a word cards can use: the lines under it are what it means, and they are its explanation too. An optional JSON header gives its `parameters` and `cardKinds`: `Keyword Drain` then `Deal amount damage to target enemy character.` is used as `Drain(3).`',
+  contest: '`Contest <name>` is a game several players play: they commit face down, reveal, and its rules say who won, who lost, or that it was a tie.',
+  zone: '`Zone <name> (per-player, public)` declares a zone and the standing rules it keeps.',
   buff: '`Buff <name>` declares a buff the document\'s cards can add. Buff sections are document-level, like in an ability document.',
 };
 
@@ -1471,6 +1792,9 @@ function suggestion(label: string, doc?: string): Suggestion {
 const HEADING_SUGGESTIONS: readonly Suggestion[] = [
   suggestion('Card', CARD_WORD_DOCS['card']),
   suggestion('Buff', CARD_WORD_DOCS['buff']),
+  suggestion('Keyword', CARD_WORD_DOCS['keyword']),
+  suggestion('Contest', CARD_WORD_DOCS['contest']),
+  suggestion('Zone', CARD_WORD_DOCS['zone']),
 ];
 
 const STARTER_SUGGESTIONS: readonly Suggestion[] = CARD_LINE_STARTERS.map((label) =>
@@ -1481,6 +1805,8 @@ const STARTER_SUGGESTIONS: readonly Suggestion[] = CARD_LINE_STARTERS.map((label
 const SENTENCE_FIRST_WORDS = new Set([
   'deal',
   'heal',
+  'set',
+  'increase',
   'destroy',
   'add',
   'remove',
@@ -1535,6 +1861,12 @@ function lineStarters(
     for (const label of ['Deal', 'Heal', 'Destroy', 'Add', 'Remove', 'Toggle', 'You', 'All', 'If', 'Repeat']) {
       out.push(byLabel(label));
     }
+    // …and every keyword registered for spells (one a document defines, say).
+    for (const def of keywords.defs) {
+      if (!(def.cardKinds ?? ['creature']).includes('spell')) continue;
+      const needsArgs = (def.arity?.[0] ?? 0) > 0;
+      out.push(suggestion(needsArgs ? `${def.name}(…)` : `${def.name}.`, def.details ?? def.summary));
+    }
   }
   out.push(byLabel('Buff'));
   return out;
@@ -1578,6 +1910,9 @@ export function completeCardAt(
 
   const split = splitSections(text);
   const declared = withDeclaredBuffs(dictionary, split.buffs);
+  // The keywords this document defines complete like the built-ins.
+  keywords = new KeywordRegistry(keywords.defs);
+  for (const defined of documentKeywords(text)) if (!keywords.has(defined.name)) keywords.add(defined);
   const section = [...split.sections].reverse().find((candidate) => candidate.heading.start <= line.start);
 
   // A heading line: the name after "Card"/"Buff" is free text.

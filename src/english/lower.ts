@@ -152,6 +152,8 @@ function lowerChars(chars: CharsPhrase): EntityQueryIR {
         // The language names only the character that caused the event.
         sourceType: 'character',
       };
+    case 'it':
+      return { kind: 'event', role: 'subject' };
     case 'bound':
       return { kind: 'bound', name: chars.name ?? '' };
     case 'all': {
@@ -388,6 +390,21 @@ function lowerSentence(sentence: Sentence): EffectIR {
         op: 'add',
         amount: amount(sentence.amount),
       };
+    case 'increaseMax':
+      return {
+        kind: 'gaugeMax',
+        query: lowerChars(sentence.chars),
+        gauge: sentence.gauge,
+        amount: amount(sentence.amount),
+      };
+    case 'set':
+      return {
+        kind: 'gauge',
+        query: lowerChars(sentence.chars),
+        gauge: sentence.gauge,
+        op: 'set',
+        amount: amount(sentence.amount),
+      };
     case 'destroy':
       return { kind: 'destroy', query: lowerChars(sentence.chars) };
     case 'addBuff':
@@ -593,10 +610,12 @@ function lowerBuff(section: BuffSection): BuffIR {
  * "this zone" of `Cards in this zone have …` is the zone the heading names.
  */
 function lowerZone(section: ZoneSection): ZoneSectionIR {
+  if (section.rule !== undefined) return lowerRule(section);
   const plain = section.sentences.filter((sentence) => sentence.event === undefined);
   const rules = section.sentences.filter((sentence) => sentence.event !== undefined);
   return {
     zone: section.zone,
+    ...(section.rule !== undefined ? { rule: section.rule } : {}),
     steps: plain.map((sentence) =>
       lowerStep(sentence.kind === 'zoneAbility' ? { ...sentence, zone: section.zone } : sentence),
     ),
@@ -610,6 +629,41 @@ function lowerZone(section: ZoneSection): ZoneSectionIR {
         }
       : {}),
   };
+}
+
+/**
+ * A `Rule` section: each sentence that says "When …" starts a rule; the steps braces gather under it
+ * (`When … then { … }`) follow as steps of the same ability, and an `If … { … }` block is **one** step
+ * whose condition is checked once, before any of its effects.
+ */
+function lowerRule(section: ZoneSection): ZoneSectionIR {
+  const triggers: { event: string; yours: boolean; steps: StepIR[] }[] = [];
+  let block = 0;
+  let open: StepIR | undefined;
+  section.sentences.forEach((sentence, at) => {
+    const id = section.blocks?.[at] ?? 0;
+    const step = lowerStep({ ...sentence, event: undefined } as Sentence);
+    if (sentence.event !== undefined) {
+      triggers.push({
+        event: sentence.event.replace(/:yours$/, ''),
+        yours: sentence.event.endsWith(':yours'),
+        steps: [],
+      });
+      block = 0;
+    }
+    const steps = triggers[triggers.length - 1]?.steps;
+    if (!steps) return;
+    if (id !== 0 && id === block && open) {
+      // More of the same `If { … }` block: its effects join the step that already holds the gate.
+      steps[steps.length - 1] = { ...open, effects: [...open.effects, ...step.effects] };
+      open = steps[steps.length - 1];
+      return;
+    }
+    steps.push(step);
+    block = id;
+    open = id === 0 ? undefined : step;
+  });
+  return { zone: section.zone, rule: section.rule!, steps: [], ...(triggers.length > 0 ? { triggers } : {}) };
 }
 
 /* ------------------------------ documents ----------------------------- */

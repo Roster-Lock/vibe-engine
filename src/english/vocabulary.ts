@@ -7,7 +7,7 @@
  */
 
 /** Section heading words — a heading must start its own line. */
-export const SECTION_WORDS = ['ability', 'buff', 'zone', 'contest'] as const;
+export const SECTION_WORDS = ['ability', 'buff', 'zone', 'contest', 'rule'] as const;
 
 /** What a modifier claims: a change that loses value, or one that gains it. */
 export const CHANGE_WORDS = ['damage', 'healing'] as const;
@@ -46,6 +46,8 @@ export const MODIFIER_REWRITES = [
 export const SENTENCE_STARTERS = [
   'deal',
   'heal',
+  'set',
+  'increase',
   'destroy',
   'add',
   'remove',
@@ -298,6 +300,8 @@ export const WORD_DOCS: Readonly<Record<string, string>> = {
   odd: '`an odd number of <characters>` — a parity count.',
   number: 'Part of "an even number of" / "an odd number of".',
   may: '`You may <effect>.` — the controller is asked when the effect runs; a no skips it. Asked **after** any `If …,` condition, so you are never asked about something that could not happen.',
+  increase: '`Increase mana maximum of this by 1.` — raises a gauge\'s **maximum**, for good. The maximum is never written directly (it is derived from buffs), so each use is its own unremovable +N, and the gauge\'s current value does not move: follow it with `Set mana of this to this.mana.max.` to refill. Cap it with an `If`: `If this.mana.max < 10 { Increase mana maximum of this by 1. }`.',
+  set: '`Set mana of this to this.mana.max.` — writes one named gauge\'s **current** value on the characters, to a number or a formula. A gauge\'s maximum is `<gauge>.max`, so this refills it; the maximum itself is never written (it comes from buffs).',
   repeat: '`Repeat [up to <n> times] [while <condition>] [if you choose]: <effect>.` — any subset of the three clauses. The condition is checked before the prompt, so you are never asked about an iteration that could not happen.',
   while: '`repeat while <condition>:` — the pure gate on each iteration.',
   roll: '`Roll a d20.` / `Roll 2d6.` — rolls the dice once. Put a **result per line** under it for a table: `1: …`, `2 to 5: …`, `15 or more: …`, `Otherwise: …` — the roll is read once and the first line it falls in runs; a result with no line does nothing. Later sentences read the outcome as `that value` (the sum; for one die, the die), `that highest die` or `that lowest die`: "Roll 2d6. Deal that value damage to target enemy character." `That` is always the **most recent** roll; to keep an earlier one, store it: "Store that value as AttackerRoll." A roll is announced, so effects can respond to it.',

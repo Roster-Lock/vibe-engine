@@ -22,7 +22,7 @@ const describe = (event: GameEvent): string | undefined => {
     return `${event.target.name} recovers ${amountOf(event)}`;
   }
   if (event.type === 'character:destroyed') return `💀 ${event.character.name} dies`;
-  if (event.type === 'buff:added' && event.buff.id !== 'mana-crystal' && event.buff.id !== 'summoning-sickness') {
+  if (event.type === 'buff:added' && !event.buff.id.startsWith('max-') && event.buff.id !== 'summoning-sickness') {
     return `${event.character.name} gains ${event.buff.name}`;
   }
   return undefined;

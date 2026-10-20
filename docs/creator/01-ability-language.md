@@ -555,6 +555,41 @@ Suspend: Move this to the Suspend zone with 2 counters on it.
 - `<Name>: <sentence>` on a card is an ability the card has while it is in its owner's hand.
 - `Cast <cards> from <zone> without paying their cost.` casts cards for the zone's owner.
 
+## Rules: cards that are always in force
+
+A card of `"type": "rule"` is a standing rule of the game. It has no cost and is never played. Every
+player has their own copy, so "you" and `this` are the rule's owner and their hero, and every line says
+when it applies:
+
+```
+Card Mana
+{ "type": "rule" }
+When your turn starts then {
+  If this.mana.max < 10 {
+    Increase mana maximum of this by 1.
+  }
+  Set mana of this to this.mana.max.
+}
+
+Card Summoning Sickness
+{ "type": "rule" }
+When a character owned by you enters play then Add Summoning Sickness to it.
+```
+
+- `When your turn starts|ends then …` runs on its owner's turns; `When a turn starts|ends then …` runs
+  on every turn, for each owner.
+- `When a character [owned by you] enters play then …` — `it` is the character that arrived. `it` means
+  nothing outside a rule.
+- Braces group several steps into one ability: `When your turn starts then { … }`. They run in order, so
+  the maximum grows and then the mana refills to it. `If <condition> { … }` checks its condition once,
+  for everything inside it; `If <condition>, <step>.` still guards a single sentence.
+- A rule with the name of one a player already has replaces it, for that player.
+- `Set <gauge> of <characters> to <amount>.` writes a gauge's current value (a number or a formula; a
+  gauge's maximum is `<gauge>.max`).
+- `Increase <gauge> maximum of <characters> by <amount>.` raises a gauge's maximum. The maximum is never
+  written, it is derived from buffs, so each use is its own unremovable +N and the current value does not
+  move. A ceiling is an `If` block around it.
+
 ## Contests: winners and losers
 
 A contest is a function of a **list of players**: it receives them, and what comes out is who won,
@@ -635,6 +670,44 @@ table (so it says who goes first), and `All players commit …` is everyone toge
 other sentences about every player — `All players move …`, `play`, `create`, and
 `all players'` / `all opponents'` for their zones — are simultaneous, with the base
 form of the verb.
+
+## Defining a keyword
+
+A card document can add words to the vocabulary **in the language itself**. A keyword is a name for some
+lines of the language, and those lines are also its explanation — there is nothing else to write.
+
+```
+Keyword Scorch
+Deal 2 damage to all enemy characters.
+
+Card Fire
+{ "cost": 1, "type": "spell" }
+Scorch.
+```
+
+A keyword that takes arguments names them in an optional JSON header, and writes each one where it goes:
+
+```
+Keyword Drain
+{ "parameters": ["amount"], "cardKinds": ["spell"] }
+Deal amount damage to target enemy character.
+Heal this for amount.
+
+Card Siphon
+{ "cost": 1, "type": "spell" }
+Drain(6).
+```
+
+- **Meaning:** `Drain(6).` means the lines, with `amount` replaced by `6`. The card prints the keyword, not what it
+  means, and the lines join the card's own — so every rule about a card's effects (a spell has no `When` trigger, a
+  creature's one-shot effect needs its event) applies to them. On hover a player reads the lines themselves.
+- **Header (optional):** `parameters` — names written in the lines where each argument goes — and `cardKinds`
+  (`"spell"` and/or `"creature"`). By default a keyword whose lines start with `When` is for creatures and any other
+  is for spells. There is deliberately no `summary`: the English is the explanation.
+- **Checked once, where it is defined:** the lines are compiled with every parameter standing for `1`, and a mistake
+  is reported on the line with the keyword named. A keyword is one word and cannot reuse a built-in name.
+- **What it cannot be:** a keyword is text, so it can only say what sentences can say. `Weight` and `Fading` stay built
+  in because they set properties of a buff (they are not sentences).
 
 ## Creatures that effects make
 
@@ -728,8 +801,8 @@ bounded LaTeX; the source remains ordinary Unicode text so it is easy to edit
 and share.
 
 A formula reads `this` as the ability's owner — every gauge by id (`this.hp`,
-`this.mana`, and any custom gauge), each gauge's maximum under `<id>Max`
-(`this.hpMax`), and `this.speed`. `%`-wrapped values (`doubled`, custom named
+`this.mana`, and any custom gauge — its current value), a gauge's maximum and minimum as
+`this.hp.max` / `this.hp.min`, and `this.speed`. `%`-wrapped values (`doubled`, custom named
 stats) aren't reachable yet — only what's listed above.
 
 A property-access dot needs **no space on either side** (`this.hp`, not

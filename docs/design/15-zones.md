@@ -417,7 +417,7 @@ card game real; 4 is cheap and self-contained; 5 may never be needed.
    `#characters`/`#garbage` sets replaced by the registry, so `play` and
    `garbage` are ordinary declared zones; `zone:changed` /
    `zone:changed:batch` events; `engine.moveTo` and `engine.zones`; the
-   card game's zones declared as data in `src/games/cards/zones.ts`.
+   card game's zones declared as data in `examples/card-game/zones.ts`.
    `destroy` now moves to the garbage through the registry and announces
    the transition (observed as damage → left play → died; the three
    event-sequence assertions in `test/triggered-actions.test.ts` grew the

@@ -21,7 +21,7 @@
  * Add the group when the zone is declared; retrofitting it once content
  * references bare zone names is expensive.
  */
-import { GARBAGE, PLAY, type ZoneDef } from '../../engine/index.js';
+import { GARBAGE, PLAY, type ZoneDef } from '../../src/engine/index.js';
 
 /** A player's library. Ordered, and hidden **even from its owner**. */
 export const DECK: ZoneDef = {

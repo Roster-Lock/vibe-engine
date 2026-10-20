@@ -25,7 +25,8 @@ import {
   type ZoneRegistry,
 } from '../../src/engine/index.js';
 import { createDraw, type DrawFn } from '../../src/games/cards/draw.js';
-import { ACTIVE, DECK, GARBAGE, HAND, STACK, STOLEN } from '../../src/games/cards/zones.js';
+import { GARBAGE } from '../../src/engine/index.js';
+import { ACTIVE, DECK, HAND, STACK, STOLEN } from './zones.js';
 import type { Card, CardSide } from './cards.js';
 import { HAND_ABILITIES, instantiate, type CardObject } from './objects.js';
 
@@ -38,8 +39,7 @@ export interface CardOwner extends Player {
   readonly deckList: readonly Card[];
 }
 
-/** Hearthstone's ceiling: ten crystals, ten cards in hand. */
-export const MAX_CRYSTALS = 10;
+/** Hearthstone's ceiling: ten cards in hand. */
 export const MAX_HAND = 10;
 
 /**
@@ -105,8 +105,6 @@ export class Side implements CardSide {
   /** Permanents in play, in the order they landed. */
   readonly board: Character[] = [];
 
-  /** Mana crystals earned so far — the hero's mana max is derived from them. */
-  crystals = 0;
   /** How many times this side has drawn from an empty deck. */
   fatigue = 0;
   /** Creatures that have already attacked this turn. */

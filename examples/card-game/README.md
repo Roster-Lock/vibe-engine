@@ -171,33 +171,44 @@ a player, so "at the start of *your* turn" has to be filtered by hand.
 are a fixed union in `execution/declared-fn/index.ts`. A game cannot add a
 noun without editing the engine.
 
-## Game rules are data
+## Game rules are cards
 
 The start of a turn is not a procedure with an untap step, an upkeep step and
-a draw step written into the loop. It is a **rule set**
-(`src/games/cards/rules.ts`, the game's own rules in `rules.ts`):
+a draw step written into the loop. It is a set of **rule cards**
+(`"type": "rule"`, written in `rules.ts`): English with no cost, never played,
+in force for the whole game. **Every player has their own copy**, so "you" is
+the rule's owner and `When your turn starts` means what it says.
 
-```ts
-{ id: 'draw',
-  name: 'At the start of a turn, the turn owner draws a card.',
-  at: 'turn:start', affects: 'turn-owner',
-  actions: [{ kind: 'draw', count: 1 }] }
+```
+Card Mana
+{ "type": "rule" }
+When your turn starts then {
+  If this.mana.max < 10 {
+    Increase mana maximum of this by 1.
+  }
+  Set mana of this to this.mana.max.
+}
+
+Card Summoning Sickness
+{ "type": "rule" }
+When a character owned by you enters play then Add Summoning Sickness to it.
 ```
 
-`collectUserDecisions` applies the `turn:start` rules and nothing else. The
-point is not the indirection — it is that the rules are **content**:
+`collectUserDecisions` runs the turn-start rules and nothing else; a creature
+is sick the moment it lands, because the arrival rules run inside the move that
+put it in play. The point is that the rules are **content**:
 
 - **a UI can list them** (the card table has a *Game rules* panel), so a
   player reads the game instead of inferring it;
-- **content can change them**: `game.rules.add(…)` replaces a rule with the
-  same id, so "draw two instead" is one draw rule and not two; `remove(id)`
-  takes one away. A rule the host does not understand fails loudly rather
-  than being skipped. `test/card-game-rules.test.ts` drives all three.
+- **content can change them, per player**: `game.installRules(playableCards(document), { for: [bob] })`
+  replaces Bob's rule of the same name and leaves Alice's, so "draw two
+  instead" is one draw rule and not two; `game.removeRule(name, player?)`
+  takes one away. `test/card-game-rules.test.ts` drives all of it.
 
-The vocabulary is the game's (`gain-crystal`, `refill-mana`, `wake-creatures`,
-`draw`) — a Magic-alike would have a land drop instead. Attaching it to the
-**ability language** ("when a revealed card says …") is the next step; the
-mechanism it needs is this one.
+Mana is a gauge on the hero whose **maximum is derived** from buffs, so
+`Increase mana maximum of this by 1.` attaches an unremovable +1 and the
+`Set mana …` line is the refill. The ceiling of ten is an `If` in the rule, not the
+engine.
 
 ## The turn loop, and why it fights the base class
 

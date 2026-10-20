@@ -69,6 +69,8 @@ export function charsToString(chars: CharsPhrase): string {
   switch (chars.quantifier) {
     case 'source':
       return 'the source';
+    case 'it':
+      return 'it';
     case 'bound':
       return `the ${chars.name ?? '?'}`;
     case 'this':
@@ -226,6 +228,10 @@ function bareEffectSummary(sentence: Sentence): string {
       return `Deal ${amountToString(sentence.amount)} damage to ${charsToString(sentence.chars)}.`;
     case 'heal':
       return `Heal ${charsToString(sentence.chars)} for ${amountToString(sentence.amount)}.`;
+    case 'increaseMax':
+      return `Increase ${sentence.gauge} maximum of ${charsToString(sentence.chars)} by ${amountToString(sentence.amount)}.`;
+    case 'set':
+      return `Set ${sentence.gauge} of ${charsToString(sentence.chars)} to ${amountToString(sentence.amount)}.`;
     case 'destroy':
       return `Destroy ${charsToString(sentence.chars)}.`;
     case 'addBuff':

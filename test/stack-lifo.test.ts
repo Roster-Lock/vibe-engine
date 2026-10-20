@@ -20,7 +20,7 @@ import {
   type PriorityResponse,
   type StackObject,
 } from '../src/games/cards/stack.js';
-import { CARD_ZONES } from '../src/games/cards/zones.js';
+import { CARD_ZONES } from '../examples/card-game/zones.js';
 import { Character, Player, createEngine, type Decision } from '../src/games/turn-based/index.js';
 
 class Seat extends Player implements PriorityOwner {

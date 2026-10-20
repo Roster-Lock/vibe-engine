@@ -20,7 +20,7 @@ import {
   type Term,
   type TermRef,
 } from '../../english/index.js';
-import { CARD_WORD_DOCS } from '../../english/card.js';
+import { CARD_WORD_DOCS, documentKeywords } from '../../english/card.js';
 import { BUILTIN_KEYWORDS } from '../../english/glossary.js';
 import { BuffDictionary } from '../../english/dictionary.js';
 import { ZoneDictionary } from '../../english/zone-dictionary.js';
@@ -106,6 +106,8 @@ export function editorGlossary(options: EditorGlossaryOptions = {}): Glossary {
 
 function buildEditorGlossary(options: EditorGlossaryOptions): Glossary {
   const keywords = new KeywordRegistry(BUILTIN_KEYWORDS);
+  // A card document can define keywords of its own; they are explained like the built-in ones.
+  if (options.card && options.source) for (const def of documentKeywords(options.source)) if (!keywords.has(def.name)) keywords.add(def);
   return new Glossary({
     keywords,
     ...(options.card ? { cardWords: CARD_WORD_DOCS } : {}),

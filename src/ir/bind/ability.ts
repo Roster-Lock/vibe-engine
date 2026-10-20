@@ -26,6 +26,7 @@ import {
   markersFor,
   move as moveEntity,
   heal,
+  maxModifier,
   gaugeDelta,
   gaugeTransformCtx,
   passiveActionModifier,
@@ -76,7 +77,7 @@ import { validateRounds } from '../rounds.js';
 import { engineCast, engineCastable, type CastFn } from '../../games/cards/cast.js';
 import { engineCreate, type CreateFn } from '../../games/cards/create.js';
 import { createDraw, engineDraw, type DrawFn } from '../../games/cards/draw.js';
-import { evaluateMathExpression } from '../math-expression.js';
+import { evaluateMathExpression, GaugeReading } from '../math-expression.js';
 
 export interface BindOptions {
   /**
@@ -137,11 +138,24 @@ export interface ZoneBinding {
    * state.
    */
   apply(engine: GameEngine): Promise<void>;
+  /** Set for a `Rule` section: the rule's name. A rule is in no zone; each player has their own copy. */
+  readonly rule?: string;
   /**
    * Runs the zone's standing rules for `event` (`When your turn starts then …` is `turn:start`).
    * A rule that says "your" runs only for the instance `turnOwner` owns.
+   *
+   * A **rule** is owned by a player (`owner`): "you" and `this` are them and their first character,
+   * and a line that says "your turn" / "owned by you" runs only for their turn / their characters.
+   * Without an `owner` the rule is the whole game's: "you" is `turnOwner`. For `enters`, `subjects`
+   * are the characters that arrived: "it".
    */
-  trigger(event: string, engine: GameEngine, turnOwner: Player | undefined): Promise<void>;
+  trigger(
+    event: string,
+    engine: GameEngine,
+    turnOwner: Player | undefined,
+    subjects?: readonly Character[],
+    owner?: Player,
+  ): Promise<void>;
 }
 
 export interface BindResult {
@@ -292,18 +306,15 @@ const NO_EVENT: EventBinding = { subjects: [], sources: [] };
 
 /**
  * A character read for the math formula language: every gauge by id
- * (`hp`, `mana`, …), each gauge's max under `<id>Max`, and `speed`. A
+ * (`hp`, `mana`, …) — its current value, or `.max` / `.min` — and `speed`. A
  * plain object rather than the `Character` instance itself — nothing
  * about `hp`/`mana` is a property on `Character` (see its own doc: gauges
  * are declared data, reached through `.gauges`/`.gauge(id)`), so a
  * formula needs this translation to write `this.hp` at all.
  */
-function mathCharacterOf(character: Character): Record<string, number> {
-  const fields: Record<string, number> = { speed: character.speed };
-  for (const gauge of character.gauges) {
-    fields[gauge.id] = gauge.current;
-    fields[`${gauge.id}Max`] = gauge.max;
-  }
+function mathCharacterOf(character: Character): Record<string, number | GaugeReading> {
+  const fields: Record<string, number | GaugeReading> = { speed: character.speed };
+  for (const gauge of character.gauges) fields[gauge.id] = new GaugeReading(gauge.current, gauge.max, gauge.min);
   return fields;
 }
 
@@ -533,6 +544,18 @@ function resolveQuery(query: EntityQueryIR, ctx: ResolveContext, options: BindOp
 
 /* ------------------------------- effects ------------------------------ */
 
+/** The buff that is "+amount to this gauge's maximum": one per use, never removable. */
+function maximumBuff(gauge: string, amount: number): BuffDef {
+  return makeBuff({
+    id: `max-${gauge}`,
+    name: `Maximum ${gauge}`,
+    description: `${amount >= 0 ? '+' : ''}${amount} maximum ${gauge}`,
+    weight: 0,
+    removable: false,
+    abilities: [maxModifier({ name: `Maximum ${gauge}`, gauge, add: amount })],
+  });
+}
+
 function effectActions(effect: EffectIR, ctx: ResolveContext, options: BindOptions): Action[] {
   ctx.engine.gas.spend('effect', effect.kind);
   if (effect.kind === 'result') {
@@ -593,6 +616,14 @@ function effectActions(effect: EffectIR, ctx: ResolveContext, options: BindOptio
         if (effect.op === 'set') actions.push(setGauge(gauge, amount, ctx.self));
         else if (effect.op === 'add') actions.push(heal(gauge, amount, ctx.self));
         else actions.push(damage(gauge, amount, ctx.self));
+      }
+      break;
+    }
+    case 'gaugeMax': {
+      for (const c of entities) {
+        const amount = valueOf(effect.amount, { ...ctx, subject: c }, options);
+        if (!c.findGauge(effect.gauge)) continue;
+        actions.push(addBuff(c, maximumBuff(effect.gauge, amount), ctx.self));
       }
       break;
     }
@@ -1722,6 +1753,7 @@ function sourceTypeOf(ir: TriggerIR): 'character' | 'buff' {
  * zones and players to exist, and it runs once per instance of the zone.
  */
 function bindZone(ir: ZoneSectionIR, options: BindOptions): ZoneBinding {
+  if (ir.rule !== undefined) return bindRule(ir, ir.rule, options);
   /** Runs `steps` once for each instance of the zone (all players', if per-player), with its owner as "you". */
   const run = async (
     engine: GameEngine,
@@ -1769,6 +1801,61 @@ function bindZone(ir: ZoneSectionIR, options: BindOptions): ZoneBinding {
       for (const rule of ir.triggers ?? []) {
         if (rule.event !== event) continue;
         await run(engine, rule.steps, rule.yours ? turnOwner : undefined);
+      }
+    },
+  };
+}
+
+/**
+ * Binds a `Rule` section: a standing rule of the game. It sits in no zone; the host gives it to each
+ * player and runs it at its event with that owner as "you".
+ */
+function bindRule(ir: ZoneSectionIR, rule: string, options: BindOptions): ZoneBinding {
+  const run = async (
+    engine: GameEngine,
+    steps: readonly StepIR[],
+    player: Player | undefined,
+    subjects: readonly Character[],
+  ): Promise<void> => {
+    const holder = player ?? engine.players[0];
+    const self = holder?.livingCharacters[0] ?? holder?.characters[0];
+    if (!self) throw new Error(`Rule ${rule}: there is no player to apply it for`);
+    const ctx: ResolveContext = {
+      self,
+      engine,
+      targeting: undefined,
+      event: subjects.length > 0 ? { ...NO_EVENT, subjects } : NO_EVENT,
+      subject: undefined,
+      bindings: NO_BINDINGS,
+      thisZone: undefined,
+      rounds: new Map(),
+      rolled: { results: [] },
+      variables: new Map(),
+      temporary: new TemporaryZones(),
+    };
+    const apply = async (actions: Action[]): Promise<void> => {
+      if (actions.length > 0) await engine.apply(actions, { source: self });
+    };
+    try {
+      for (const step of steps) await apply(await stepActionsAsync(step, ctx, options, `Rule ${rule}`, apply));
+    } finally {
+      await clearTemporary(ctx, options);
+    }
+  };
+  return {
+    zone: '',
+    rule,
+    apply: async () => {},
+    async trigger(event, engine, turnOwner, subjects = [], owner) {
+      for (const entry of ir.triggers ?? []) {
+        if (entry.event !== event) continue;
+        if (owner !== undefined && entry.yours) {
+          // "Your turn" / "owned by you": this owner's own turn, or their own arrivals.
+          const mine =
+            event === 'enters' ? subjects.length > 0 && subjects.every((s) => s.controller === owner) : turnOwner === owner;
+          if (!mine) continue;
+        }
+        await run(engine, entry.steps, owner ?? turnOwner, subjects);
       }
     },
   };

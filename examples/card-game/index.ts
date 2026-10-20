@@ -30,7 +30,7 @@ export {
 export { CardGame, type CardGameOptions, type Move } from './game.js';
 export { CardPlayer, GreedyAI } from './ai.js';
 export { HumanCardPlayer, PacedGreedyAI } from './human.js';
-export { CardPile, MAX_CRYSTALS, MAX_HAND, Side } from './side.js';
+export { CardPile, MAX_HAND, Side } from './side.js';
 export { HERO_POWER_COST, makeHero } from './combat.js';
 export {
   CARD_LANGUAGE_ZONES,

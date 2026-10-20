@@ -61,7 +61,8 @@ import {
 } from '../../src/engine/index.js';
 import type { ZoneBinding } from '../../src/ir/index.js';
 import { createEngine } from '../../src/games/round-based/index.js';
-import { ACTIVE, CARD_ZONES, DECK, GARBAGE, STOLEN } from '../../src/games/cards/zones.js';
+import { GARBAGE } from '../../src/engine/index.js';
+import { ACTIVE, CARD_ZONES, DECK, STOLEN } from './zones.js';
 import {
   CardStack,
   type SpellObject,
@@ -71,11 +72,10 @@ import { chosenCharacters, type ManualAbility, type TriggerScheduler } from '../
 import type { Card, CreatureCard } from './cards.js';
 import { HAND_ABILITIES, PermanentCard, SpellCardObject, instantiate, type CardObject } from './objects.js';
 import type { CardPlayer } from './ai.js';
-import { ATTACK_PATTERN, attack, heroPower, manaCrystal, summoningSickness } from './combat.js';
-import { MAX_CRYSTALS, Side } from './side.js';
-import { CARD_RULES, type CardRule, type CardRuleAction } from './rules.js';
-import type { RuleTiming } from '../../src/games/cards/rules.js';
-import { GameRules } from '../../src/games/cards/rules.js';
+import { ATTACK_PATTERN, attack, heroPower } from './combat.js';
+import { Side } from './side.js';
+import { playableCards, type RuleCard } from './english.js';
+import { CARD_RULES, RULE_BUFFS } from './rules.js';
 import { endTurn, startTurn } from '../../src/games/round-based/index.js';
 
 /** One thing a player does during their main phase. */
@@ -106,11 +106,10 @@ export interface CardGameOptions {
   /** Extra observer for raw engine events. */
   readonly onEvent?: (event: GameEvent) => void;
   /**
-   * The standing rules to start from. Defaults to `CARD_RULES`; a variant
-   * (or a test) supplies its own set, and content can change them mid-game
-   * through `CardGame.rules`.
+   * The standing rules to start from, as a card document of `"type": "rule"` cards. Defaults to
+   * `CARD_RULES`; a variant (or a test) supplies its own.
    */
-  readonly rules?: readonly CardRule[];
+  readonly rules?: string;
 }
 
 /** Moves allowed in one turn before the game calls it a loop and passes. */
@@ -127,11 +126,8 @@ export class CardGame extends Game {
   readonly engine: GameEngine;
   /** The stack every cast goes through, and the priority windows it opens. */
   readonly cardStack: CardStack;
-  /**
-   * The game's **standing rules** — what happens at the start of a turn,
-   * and anything content adds later. Read them with `rules.all()`.
-   */
-  readonly rules: GameRules<CardRuleAction>;
+  /** Each player's own rule cards (`"type": "rule"`), in the order they apply. */
+  readonly #rules = new Map<Player, RuleCard[]>();
   readonly #sides = new Map<Player, Side>();
   readonly #order: CardPlayer[];
   readonly #maxTurns: number;
@@ -178,11 +174,14 @@ export class CardGame extends Game {
     for (const zone of CARD_ZONES) this.engine.zones.declare(zone);
     this.cardStack = new CardStack(this.engine);
     stack = this.cardStack;
-    this.rules = new GameRules(options.rules ?? CARD_RULES);
+    this.installRules(playableCards(options.rules ?? CARD_RULES, RULE_BUFFS));
     this.engine.addStateBasedRule({
       name: 'Creatures arriving in play',
       when: () => this.#newcomers().length > 0,
-      then: () => this.#noticeArrivals(),
+      then: async () => {
+        await this.#noticeArrivals();
+        return [];
+      },
     });
 
     for (const player of players) {
@@ -291,7 +290,7 @@ export class CardGame extends Game {
     this.#log(`\n--- Turn ${this.#turn}: ${side.heroName} ---`);
 
     await this.applyRules('turn:start', side);
-    await startTurn(this.engine);
+    await startTurn(this.engine, side.hero.controller);
     // "At the start of your turn" abilities fired here, and a draw can too —
     // both wait for a priority window now.
     await this.settleTriggers();
@@ -333,9 +332,52 @@ export class CardGame extends Game {
    * rules they keep. Call before `setup()` / `runLoop()`: the zones are declared now, their
    * rules are applied at setup, and their `When your turn starts then …` rules run each turn.
    */
-  installZones(authored: { readonly zoneDefs: readonly ZoneDef[]; readonly zoneBindings: readonly ZoneBinding[] }): void {
+  installZones(authored: {
+    readonly zoneDefs: readonly ZoneDef[];
+    readonly zoneBindings: readonly ZoneBinding[];
+    readonly rules?: readonly RuleCard[];
+  }): void {
     for (const def of authored.zoneDefs) this.engine.zones.declare(def);
     this.#zoneBindings.push(...authored.zoneBindings);
+    if (authored.rules) this.installRules({ rules: authored.rules });
+  }
+
+  /**
+   * The rule cards `player` plays by: what happens at the start of their turn, when their creatures
+   * arrive, and anything a card document adds with `installRules`. A UI lists these.
+   */
+  rulesOf(player: Player): readonly RuleCard[] {
+    return this.#rules.get(player) ?? [];
+  }
+
+  /** Takes a rule out of force by name — for `player`, or for everyone. Returns whether one was there. */
+  removeRule(name: string, player?: Player): boolean {
+    let removed = false;
+    for (const owner of player ? [player] : this.#order) {
+      const rules = this.#rules.get(owner) ?? [];
+      const at = rules.findIndex((existing) => existing.name === name);
+      if (at === -1) continue;
+      rules.splice(at, 1);
+      removed = true;
+    }
+    return removed;
+  }
+
+  /**
+   * Gives rule cards to players — to everyone, or to `options.for`. Each player keeps their own copy,
+   * so a card can change one player's rules and not another's. A rule with the name of one the player
+   * already has **replaces** it, in place: "draw two instead" is one draw rule, not two.
+   */
+  installRules(authored: { readonly rules: readonly RuleCard[] }, options: { readonly for?: readonly Player[] } = {}): void {
+    for (const owner of options.for ?? this.#order) {
+      const rules = this.#rules.get(owner) ?? [];
+      this.#rules.set(owner, rules);
+      for (const rule of authored.rules) {
+        const at = rules.findIndex((existing) => existing.name === rule.name);
+        if (at === -1) rules.push(rule);
+        else rules[at] = rule;
+      }
+    }
   }
 
   /** Creatures the game has already seen in play, so each arrival is noticed once. */
@@ -354,77 +396,37 @@ export class CardGame extends Game {
    * `creature:enters` rules apply to it (summoning sickness, by default). Creatures that left
    * play are forgotten, so coming back is a new arrival.
    */
-  #noticeArrivals(): Action[] {
+  async #noticeArrivals(): Promise<void> {
     for (const seen of [...this.#seenInPlay]) if (!this.engine.isInPlay(seen)) this.#seenInPlay.delete(seen);
-    const actions: Action[] = [];
     for (const creature of this.#newcomers()) {
       this.#seenInPlay.add(creature);
       const player = creature.controller as CardPlayer | undefined;
       if (!player) continue;
       const side = this.sideOf(player);
       if (!side.board.includes(creature)) side.board.push(creature);
-      for (const rule of this.rules.at('creature:enters')) {
-        for (const action of rule.actions) {
-          if (action.kind === 'summoning-sickness') actions.push(addBuff(creature, summoningSickness, side.hero));
+      // The arrival rules run now, as the creature lands: it is sick before anything else can happen.
+      for (const owner of this.#order) {
+        for (const rule of [...this.rulesOf(owner)]) {
+          await rule.binding.trigger('enters', this.engine, this.activePlayer, [creature], owner);
         }
       }
     }
-    return actions;
   }
 
   /**
-   * Applies every rule that holds at `timing`, in order.
-   *
-   * `turnOwner` is the side the turn belongs to; a rule's `affects` decides
-   * whether it lands on that side alone or on every player. Public so a
-   * variant or a test can run a timing itself.
+   * Applies every rule that holds at `timing`: each player's own rule cards, in the order they are
+   * written, with that player as "you". The zones' own rules (`Zone Suspend: When your turn starts
+   * then …`) go first. Public so a variant or a test can run a timing itself.
    */
-  async applyRules(timing: RuleTiming, turnOwner: Side): Promise<void> {
+  async applyRules(timing: 'turn:start' | 'turn:end', turnOwner: Side): Promise<void> {
+    const turn = turnOwner.hero.controller;
     if (timing === 'turn:start') {
-      // Zones keep their own rules (`Zone Suspend: When your turn starts then …`).
-      for (const binding of this.#zoneBindings) await binding.trigger('turn:start', this.engine, turnOwner.hero.controller);
+      // The board may attack again; a turn's attacks are the game's bookkeeping, not a rule.
+      turnOwner.attacked.clear();
+      for (const binding of this.#zoneBindings) await binding.trigger('turn:start', this.engine, turn);
     }
-    for (const rule of this.rules.at(timing)) {
-      const sides =
-        rule.affects === 'turn-owner' ? [turnOwner] : this.#order.map((player) => this.sideOf(player));
-      for (const side of sides) {
-        for (const action of rule.actions) await this.#applyRuleAction(side, action, rule);
-      }
-    }
-  }
-
-  /** Interprets one rule action. The only place the vocabulary is known. */
-  async #applyRuleAction(side: Side, action: CardRuleAction, rule: CardRule): Promise<void> {
-    switch (action.kind) {
-      case 'summoning-sickness':
-        return; // applied as a creature arrives (`#noticeArrivals`), not at a turn timing
-      case 'gain-crystal':
-        if (side.crystals >= MAX_CRYSTALS) return;
-        side.crystals += 1;
-        // A gauge's max is never written by content — it is derived from
-        // buffs, so a crystal *is* a buff.
-        await this.engine.addBuff(side.hero, manaCrystal, side.hero);
-        return;
-      case 'refill-mana':
-        await this.engine.apply([setGauge(side.hero.gauge('mana'), side.hero.gauge('mana').max)]);
-        return;
-      case 'wake-creatures':
-        side.attacked.clear();
-        for (const creature of [...side.board]) {
-          if (creature.hasStatus('summoning-sickness')) {
-            await this.engine.removeBuff(creature, 'summoning-sickness');
-          }
-        }
-        return;
-      case 'draw':
-        await side.draw(action.count);
-        return;
-      default: {
-        // A rule action this build does not know — a card from a newer
-        // version. Failing loudly beats silently skipping a game rule.
-        const unknown = action as { kind: string };
-        throw new Error(`CardGame: rule "${rule.id}" uses an unknown action "${unknown.kind}"`);
-      }
+    for (const owner of this.#order) {
+      for (const rule of [...this.rulesOf(owner)]) await rule.binding.trigger(timing, this.engine, turn, [], owner);
     }
   }
 
@@ -462,7 +464,7 @@ export class CardGame extends Game {
       await this.settleTriggers();
     }
     await this.applyRules('turn:end', side);
-    await endTurn(this.engine);
+    await endTurn(this.engine, side.hero.controller);
     await this.settleTriggers();
   }
 

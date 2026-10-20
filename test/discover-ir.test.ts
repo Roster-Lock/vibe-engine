@@ -27,7 +27,8 @@ import {
 } from '../src/games/turn-based/index.js';
 import { bindDocument, type DocumentIR } from '../src/ir/index.js';
 import { createEngine } from '../src/games/turn-based/index.js';
-import { DECK, GARBAGE } from '../src/games/cards/zones.js';
+import { GARBAGE } from '../src/engine/index.js';
+import { DECK } from '../examples/card-game/zones.js';
 import { PLAY } from '../src/engine/index.js';
 
 /** A card entity with a declared `cost` fact and no gauges. */

@@ -1,7 +1,7 @@
 /**
  * The card game's **zones**.
  *
- * A deck, a hand and the stack are engine zones (`src/games/cards/zones.ts`
+ * A deck, a hand and the stack are engine zones (`examples/card-game/zones.ts`
  * declares them, `src/engine/zone.ts` holds them), and a card is an entity —
  * so these tests ask the engine where a card is, not the card layer. That is
  * what makes `when a card enters the stack from hand` a trigger a game can

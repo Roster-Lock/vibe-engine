@@ -25,7 +25,8 @@ import {
   type Entity,
   type GameEvent,
 } from '../src/games/turn-based/index.js';
-import { DECK, GARBAGE, REVEALED } from '../src/games/cards/zones.js';
+import { GARBAGE } from '../src/engine/index.js';
+import { DECK, REVEALED } from '../examples/card-game/zones.js';
 import { PLAY } from '../src/engine/index.js';
 import { createEngine } from '../src/games/turn-based/index.js';
 

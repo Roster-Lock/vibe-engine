@@ -12,18 +12,20 @@
  *   taunter, its other characters *cannot be chosen* by an attack. The
  *   engine's `validTargets` enforces it, so the AI never even sees an
  *   illegal attack.
- * - **Summoning sickness** — a marker buff the card layer clears at the
- *   start of its controller's turn.
- * - **Mana crystals** — one `maxModifier` buff per crystal, so the hero's
- *   mana **max is derived** (the engine never lets content write a max).
+ * - **Summoning sickness** — a marker buff the `Summoning Sickness` rule card (`rules.ts`)
+ *   adds as a creature enters play and removes at the start of its controller's turn.
+ * - **Mana** — the hero's mana **max is derived** (the engine never lets content write a max): the
+ *   `Mana` rule card raises it with `Increase mana maximum of this by 1.`
  */
 import {
   Character,
+  auto,
   buff,
   cast,
   changeGaugeBy,
   damage,
   maxModifier,
+  removeBuff,
   restriction,
   skill,
   type GameEngine,
@@ -95,7 +97,8 @@ export function mayActOnEntry(
 /**
  * A creature that has just entered play: **it cannot act** — use an ability or attack —
  * until its controller's next turn. The standing rule (`rules.ts`) puts this on a creature
- * as it arrives, and a creature card can state exceptions (`mayActOnEntry`).
+ * as it arrives; the buff ends itself when that turn starts. A creature card can state
+ * exceptions (`mayActOnEntry`).
  */
 export const summoningSickness = buff({
   id: 'summoning-sickness',
@@ -103,6 +106,14 @@ export const summoningSickness = buff({
   description: 'cannot act until its controller’s next turn',
   weight: 0,
   abilities: [
+    auto({
+      name: 'Shake off sickness',
+      event: 'turn:start',
+      // Only its controller's turn: the other player's turn starting changes nothing.
+      when: (ctx) => 'player' in ctx.event && ctx.event.player === ctx.self.controller,
+      targets: (ctx) => [ctx.self],
+      cast: (ctx) => [removeBuff(ctx.self, 'summoning-sickness', ctx.self)],
+    }),
     restriction({
       name: 'Cannot act',
       description: 'cannot use abilities or attack the turn it enters play',
@@ -112,16 +123,6 @@ export const summoningSickness = buff({
   ],
 });
 
-/** One mana crystal: a derived +1 to the hero's mana **max**. */
-export const manaCrystal = buff({
-  id: 'mana-crystal',
-  name: 'Mana Crystal',
-  description: '+1 maximum mana',
-  weight: 0,
-  removable: false,
-  // ten separate crystals, not one buff that cannot repeat
-  abilities: [maxModifier({ name: 'Mana Crystal', gauge: 'mana', add: 1 })],
-});
 
 /** Attack — the move every creature has. */
 export const attack = cast({

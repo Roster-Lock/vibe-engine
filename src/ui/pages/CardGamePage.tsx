@@ -724,11 +724,11 @@ export function CardGamePage({ onMenu, onCreate }: { onMenu: () => void; onCreat
             <section className="creator-card">
               <h2>Game rules</h2>
               <ul className="rules-list">
-                {game.rules.all().map((rule) => (
-                  <li key={rule.id} title={`${rule.at} · ${rule.affects}`}>{rule.name}</li>
+                {game.rulesOf(game.players[0]!).map((rule) => (
+                  <li key={rule.name} title={rule.text}>{rule.name}</li>
                 ))}
               </ul>
-              <p className="hint">Standing rules, not a turn script — content can add, replace or remove one.</p>
+              <p className="hint">Standing rules are cards — a card document can add one, or replace one of the same name.</p>
             </section>
 
             <section className="creator-card log-card">

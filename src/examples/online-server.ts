@@ -9,7 +9,7 @@ import { compileDocument } from '../english/index.js';
 import { ZoneDictionary } from '../english/zone-dictionary.js';
 import { PLAY } from '../engine/index.js';
 import { Character, ViewProjector, createEngine, type Entity } from '../games/turn-based/index.js';
-import { GARBAGE } from '../games/cards/zones.js';
+import { GARBAGE } from '../engine/index.js';
 import { WebSocketServer } from 'ws';
 import {
   RemotePlayer,

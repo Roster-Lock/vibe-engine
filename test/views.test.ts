@@ -22,7 +22,7 @@ import {
   type ViewEvent,
 } from '../src/games/turn-based/index.js';
 import { PLAY } from '../src/engine/index.js';
-import { GARBAGE } from '../src/games/cards/zones.js';
+import { GARBAGE } from '../src/engine/index.js';
 
 class Seat extends Player {
   constructor(

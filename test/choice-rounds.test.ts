@@ -22,7 +22,8 @@ import {
 import { GameEndInterrupt } from '../src/engine/index.js';
 import { bindDocument, validateRounds, type DocumentIR, type EffectIR } from '../src/ir/index.js';
 import { createEngine } from '../src/games/turn-based/index.js';
-import { GARBAGE, HAND } from '../src/games/cards/zones.js';
+import { GARBAGE } from '../src/engine/index.js';
+import { HAND } from '../examples/card-game/zones.js';
 import { PLAY } from '../src/engine/index.js';
 
 class TestCard implements Entity {

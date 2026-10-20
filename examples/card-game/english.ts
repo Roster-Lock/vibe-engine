@@ -14,7 +14,7 @@
  */
 import { compileCardDocument, type CardCompileResult, type CompiledCard } from '../../src/english/card.js';
 import { ZoneDictionary, type BuffDictionary, type Diagnostic } from '../../src/english/index.js';
-import { ACTIVE, DECK, HAND, STACK, STOLEN } from '../../src/games/cards/zones.js';
+import { ACTIVE, DECK, HAND, STACK, STOLEN } from './zones.js';
 import type {
   Ability,
   Action,
@@ -22,6 +22,14 @@ import type {
   Targeting,
 } from '../../src/games/turn-based/index.js';
 import type { Card, CardContext, CreatureCard, SpellCard } from './cards.js';
+
+/** A standing rule: a card of `"type": "rule"`, with no owner and no controller. */
+export interface RuleCard {
+  readonly name: string;
+  /** The rule as written — its lines, for a panel or a log. */
+  readonly text: string;
+  readonly binding: import('../../src/ir/index.js').ZoneBinding;
+}
 
 /** Prefixes ids so an authored card never collides with the catalog. */
 const AUTHORED_PREFIX = 'authored';
@@ -87,6 +95,8 @@ export interface AuthoredCards {
   /** Zones the document declares; hand them to `CardGame.installZones` with the bindings. */
   readonly zoneDefs: readonly import('../../src/engine/index.js').ZoneDef[];
   readonly zoneBindings: readonly import('../../src/ir/index.js').ZoneBinding[];
+  /** The `"type": "rule"` cards: standing rules of the game; hand them to `CardGame.installRules`. */
+  readonly rules: RuleCard[];
   /** Every playable card the document declares, in document order. */
   readonly cards: Card[];
   readonly diagnostics: Diagnostic[];
@@ -116,8 +126,11 @@ export function playableCards(source: string, dictionary?: BuffDictionary): Auth
     ...(dictionary ? { dictionary } : {}),
   });
   return {
-    cards: compiled.cards.filter((card) => !card.token).map(toGameCard),
+    cards: compiled.cards.filter((card) => !card.token && card.kind !== 'rule').map(toGameCard),
     creatures: compiled.cards.filter((card) => card.token).map(toGameCard),
+    rules: compiled.cards.flatMap((card) =>
+      card.kind === 'rule' && card.rule ? [{ name: card.name, text: card.rulesText, binding: card.rule }] : [],
+    ),
     zoneDefs: compiled.zoneDefs,
     zoneBindings: compiled.zones,
     diagnostics: compiled.diagnostics,

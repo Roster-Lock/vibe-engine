@@ -6,7 +6,7 @@
  * wherever the object ends up.
  */
 import { describe, expect, it } from 'vitest';
-import { CARD_ZONES } from '../src/games/cards/zones.js';
+import { CARD_ZONES } from '../examples/card-game/zones.js';
 import {
   CardStack,
   PASS,

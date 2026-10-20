@@ -199,17 +199,15 @@ errors back to the author.
   owner reads. **Open:** attacks and the hero power are still immediate
   (combat, not spells) — what they trigger gets a window, but they cannot be
   answered. See docs/design/15-zones.md.
-- ✅ **Game rules are data, not a turn script** (this session): the card
-  game's untap/upkeep/draw steps are a **rule set**
-  (`src/games/cards/rules.ts` — id, English name, timing, scope, actions)
-  that the loop applies, not code it runs. The rules are listable (the card
-  table shows them), replaceable by id (`game.rules.add` — "draw two
-  instead" is one draw rule, not two), removable, and an action the host
-  does not know fails loudly. Guarded by `test/card-game-rules.test.ts`.
-  **Open:** the ability language cannot yet *write* a rule change — a
-  revealed card's "when your turn starts then draw an extra card" needs a
-  sentence that compiles to a `GameRule`, which is the language work the
-  mechanism now unblocks.
+- ✅ **Game rules are cards, not a turn script**: the card game's
+  untap/upkeep/draw steps are **rule cards** (`"type": "rule"` — no cost, never
+  played; `examples/card-game/rules.ts`) written in the same language as every
+  other card: `When your turn starts then Draw(you, 1).`,
+  `When a character owned by you enters play then Add Summoning Sickness to
+  it.` Every player has their own copy, so a card can change one player's
+  rules and not another's. The loop runs them; they are listable, replaceable
+  by name (`game.installRules`), and removable. Guarded by
+  `test/card-game-rules.test.ts`.
 - ✅ **Buff durations and action modifiers** (this session): `Buff Mark
   (until end of turn)` / `(for 2 turns)` — a duration is not an engine
   concept, it lowers to an ordinary triggered ability on the buff that

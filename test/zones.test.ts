@@ -26,7 +26,7 @@ import {
   type GameEvent,
 } from '../src/games/turn-based/index.js';
 import { isDeath, leftPlay } from '../src/games/turn-based/index.js';
-import { ACTIVE, CARD_ZONES, DECK, HAND, REVEALED, STACK } from '../src/games/cards/zones.js';
+import { ACTIVE, CARD_ZONES, DECK, HAND, REVEALED, STACK } from '../examples/card-game/zones.js';
 import { createEngine } from '../src/games/turn-based/index.js';
 
 class Idle extends Player {

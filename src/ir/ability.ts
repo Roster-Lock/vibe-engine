@@ -245,6 +245,17 @@ export type EffectIR =
       readonly op: GaugeOp;
       readonly amount: ValueIR;
     }
+  /**
+   * `Increase mana maximum of this by 1.` — raises a named gauge's **maximum**. The maximum is never
+   * written, it is derived from buffs, so this attaches an unremovable buff whose only job is that
+   * `+amount`; every use is its own instance, and order is kept like any other buff.
+   */
+  | {
+      readonly kind: 'gaugeMax';
+      readonly query: EntityQueryIR;
+      readonly gauge: string;
+      readonly amount: ValueIR;
+    }
   | { readonly kind: 'destroy'; readonly query: EntityQueryIR }
   | { readonly kind: 'addBuff'; readonly query: EntityQueryIR; readonly buff: BuffRefIR }
   | { readonly kind: 'removeBuff'; readonly query: EntityQueryIR; readonly buff: BuffRefIR }
@@ -907,8 +918,14 @@ export interface DocumentIR {
  * player's instance, with that player as "you".
  */
 export interface ZoneSectionIR {
-  /** The zone, as an abstract role mapped through `BindOptions.aliases`. */
+  /** The zone, as an abstract role mapped through `BindOptions.aliases`. Empty for a rule. */
   readonly zone: string;
+  /**
+   * Set for a `Rule <name>` section: a standing rule of the game, in no zone. Each player has a copy;
+   * its triggers run with that owner as "you", on their own turns (`yours`) or every turn, and for
+   * `enters` with the character that arrived as "it".
+   */
+  readonly rule?: string;
   readonly steps: readonly StepIR[];
   /** Standing rules of the zone: `When your turn starts then …` runs `steps` at that event. */
   readonly triggers?: readonly { readonly event: string; readonly yours: boolean; readonly steps: readonly StepIR[] }[];

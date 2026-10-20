@@ -26,7 +26,8 @@ import {
   type Entity,
   type GameEvent,
 } from '../games/turn-based/index.js';
-import { DECK, GARBAGE, HAND } from '../games/cards/zones.js';
+import { GARBAGE } from '../engine/index.js';
+import { DECK, HAND } from '../../examples/card-game/zones.js';
 import { ViewProjector } from '../engine/index.js';
 import { setEngineCast } from '../games/cards/cast.js';
 

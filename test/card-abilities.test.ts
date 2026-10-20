@@ -19,7 +19,7 @@ import {
 } from '../src/games/turn-based/index.js';
 import { ZoneDictionary } from '../src/english/zone-dictionary.js';
 import { PLAY } from '../src/engine/index.js';
-import { GARBAGE } from '../src/games/cards/zones.js';
+import { GARBAGE } from '../src/engine/index.js';
 import { setEngineCast } from '../src/games/cards/cast.js';
 
 class Seat extends Player {

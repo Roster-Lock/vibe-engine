@@ -9,7 +9,8 @@ import { ZoneDictionary } from '../src/english/zone-dictionary.js';
 import { Character, Player, createEngine, type Decision, type Entity, type GameEvent } from '../src/games/turn-based/index.js';
 import { PLAY } from '../src/engine/index.js';
 import { createDraw, setEngineDraw } from '../src/games/cards/draw.js';
-import { DECK, GARBAGE, HAND } from '../src/games/cards/zones.js';
+import { GARBAGE } from '../src/engine/index.js';
+import { DECK, HAND } from '../examples/card-game/zones.js';
 
 class Card implements Entity {
   readonly type = 'card' as const;

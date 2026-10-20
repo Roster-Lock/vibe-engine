@@ -730,7 +730,7 @@ export class CardStack {
 
   #zone(id: string) {
     const zone = this.#engine.zones.zone(id);
-    if (!zone) throw new Error(`CardStack: the "${id}" zone is not declared — see src/games/cards/zones.ts`);
+    if (!zone) throw new Error(`CardStack: the "${id}" zone is not declared — see examples/card-game/zones.ts`);
     return zone;
   }
 }

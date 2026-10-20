@@ -21,7 +21,8 @@ import { compileDocument, lowerDocument, parseDocument, renderDocument, wordDoc 
 import { ZoneDictionary } from '../src/english/zone-dictionary.js';
 import { Character, Player, type ChoiceAnswer, type ChoiceRequest, type Decision, type Entity } from '../src/games/turn-based/index.js';
 import { createEngine } from '../src/games/turn-based/index.js';
-import { GARBAGE, HAND } from '../src/games/cards/zones.js';
+import { GARBAGE } from '../src/engine/index.js';
+import { HAND } from '../examples/card-game/zones.js';
 import { PLAY } from '../src/engine/index.js';
 
 const ZONES = new ZoneDictionary([HAND.id]);

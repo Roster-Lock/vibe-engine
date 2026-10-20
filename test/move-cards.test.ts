@@ -11,7 +11,8 @@ import { CardGame, type Move } from '../examples/card-game/game.js';
 import { lowerDocument, parseDocument, renderDocument } from '../src/english/index.js';
 import { ZoneDictionary } from '../src/english/zone-dictionary.js';
 import { PLAY } from '../src/engine/index.js';
-import { GARBAGE, HAND } from '../src/games/cards/zones.js';
+import { GARBAGE } from '../src/engine/index.js';
+import { HAND } from '../examples/card-game/zones.js';
 
 const ZONES = new ZoneDictionary([HAND.id, 'deck', 'stolen']);
 const lower = (text: string) => lowerDocument(parseDocument(text, { zones: ZONES }).doc);

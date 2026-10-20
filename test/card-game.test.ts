@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { CardPlayer } from '../examples/card-game/ai.js';
 import { playableCards } from '../examples/card-game/english.js';
 import { CardGame, type Move } from '../examples/card-game/game.js';
+import { RULE_BUFFS } from '../examples/card-game/rules.js';
 import {
   BLOODFEN_RAPTOR,
   FIREBALL,
@@ -109,8 +110,8 @@ describe('card game — the board', () => {
 
   it('is a standing rule: removing it lets a creature attack the turn it lands', async () => {
     const { game, a } = makeGame(deckOf(WISP), deckOf(WISP));
-    expect(game.rules.describe()).toContain('A creature cannot act the turn it enters play.');
-    expect(game.rules.remove('summoning-sickness')).toBe(true);
+    expect(game.rulesOf(a).map((r) => r.name)).toContain('Summoning Sickness');
+    expect(game.removeRule('Summoning Sickness')).toBe(true);
     await game.setup();
 
     a.script(play(WISP));
@@ -122,8 +123,15 @@ describe('card game — the board', () => {
 
   it('can be switched on by a game that starts without it', async () => {
     const { game, a } = makeGame(deckOf(WISP), deckOf(WISP));
-    game.rules.remove('summoning-sickness');
-    game.rules.add({ id: 'summoning-sickness', name: 'Back again.', at: 'creature:enters', affects: 'turn-owner', actions: [{ kind: 'summoning-sickness' }] });
+    game.removeRule('Summoning Sickness');
+    game.installRules(
+      playableCards(
+        `Card Summoning Sickness
+{ "type": "rule" }
+When a character owned by you enters play then Add Summoning Sickness to it.`,
+        RULE_BUFFS,
+      ),
+    );
     await game.setup();
     a.script(play(WISP));
     await turn(game);

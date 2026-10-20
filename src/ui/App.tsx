@@ -20,6 +20,7 @@ import { CardGamePage } from './pages/CardGamePage.js';
 import { CreatePage } from './pages/CreatePage.js';
 import { GamePage } from './pages/GamePage.js';
 import { MainMenuPage } from './pages/MainMenuPage.js';
+import { ModelSpikePage } from './pages/ModelSpikePage.js';
 import { PlayPage } from './pages/PlayPage.js';
 import { SelectPage } from './pages/SelectPage.js';
 import type { CharacterDef } from '../games/turn-based/content/index.js';
@@ -31,7 +32,8 @@ export type Route =
   | { name: 'create' }
   | { name: 'play' }
   | { name: 'cards' }
-  | { name: 'card-create' };
+  | { name: 'card-create' }
+  | { name: 'model-spike' };
 
 export function App() {
   const [route, setRoute] = useState<Route>({ name: 'menu' });
@@ -71,6 +73,8 @@ export function App() {
       );
     case 'play':
       return <PlayPage onMenu={() => setRoute({ name: 'menu' })} />;
+    case 'model-spike':
+      return <ModelSpikePage onBack={() => setRoute({ name: 'menu' })} />;
     case 'menu':
       return (
         <MainMenuPage
@@ -79,6 +83,7 @@ export function App() {
           onPlay={() => setRoute({ name: 'play' })}
           onCards={() => setRoute({ name: 'cards' })}
           onCreateCard={() => setRoute({ name: 'card-create' })}
+          onModelSpike={() => setRoute({ name: 'model-spike' })}
         />
       );
   }

@@ -69,6 +69,7 @@ export {
   compileCardDocument,
   completeCardAt,
   cardWordDoc,
+  documentKeywords,
   CARD_WORD_DOCS,
   CARD_LINE_STARTERS,
 } from './card.js';

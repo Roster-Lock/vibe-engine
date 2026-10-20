@@ -19,7 +19,7 @@ import {
   type Decision,
   type GameEvent,
 } from '../src/games/turn-based/index.js';
-import { CARD_ZONES } from '../src/games/cards/zones.js';
+import { CARD_ZONES } from '../examples/card-game/zones.js';
 import {
   CardStack,
   PASS,

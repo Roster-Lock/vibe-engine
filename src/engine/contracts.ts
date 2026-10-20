@@ -118,8 +118,8 @@ export type Action = ActionMap[keyof ActionMap];
  * optional properties") — in which case every member carries the same tag.
  */
 export interface GameEventMap {
-  'turn:start': { type: 'turn:start' };
-  'turn:end': { type: 'turn:end' };
+  'turn:start': { type: 'turn:start' } | { type: 'turn:start'; player: Player };
+  'turn:end': { type: 'turn:end' } | { type: 'turn:end'; player: Player };
   'gauge:changed': GaugeChangedEvent;
   'gauge:changed:batch': GaugeChangedBatchEvent;
   'gauge:maxChanged': GaugeMaxChangedEvent;

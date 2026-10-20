@@ -11,6 +11,7 @@ export function MainMenuPage({
   onPlay,
   onCards,
   onCreateCard,
+  onModelSpike,
 }: {
   /** Go to the fighter selection page. */
   onWatch: () => void;
@@ -22,6 +23,8 @@ export function MainMenuPage({
   onCards: () => void;
   /** Go to the card creator. */
   onCreateCard: () => void;
+  /** Go to the 3D model rendering spike. */
+  onModelSpike: () => void;
 }) {
   return (
     <div className="page menu-page">
@@ -56,6 +59,11 @@ export function MainMenuPage({
           🎮 Play yourself
         </button>
         <p className="hint">The old interactive demo — you control the hero.</p>
+
+        <button className="menu-secondary" onClick={onModelSpike}>
+          🧪 3D model spike
+        </button>
+        <p className="hint">Experimental: render a real 3D model in-browser and switch animations.</p>
       </section>
     </div>
   );

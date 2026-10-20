@@ -199,6 +199,16 @@ export interface ZoneSection {
   /** The zone's canonical name (resolved against the host's zones). */
   readonly zone: string;
   readonly nameSpan: Span;
+  /**
+   * Set when this is a `Rule <name>` section — a standing rule of the whole game, owned by no
+   * player and in no zone (`zone` is then empty). The host runs it for the player whose turn it is.
+   */
+  readonly rule?: string;
+  /**
+   * For a rule: the `If … { … }` block each sentence is inside (parallel to `sentences`), or 0 for
+   * none. Sentences of one block share a guard that is checked once, before any of them.
+   */
+  readonly blocks?: number[];
   sentences: Sentence[];
 }
 
@@ -398,6 +408,8 @@ export interface RepeatClause {
 export type Sentence =
   | DealSentence
   | HealSentence
+  | SetSentence
+  | IncreaseMaxSentence
   | DestroySentence
   | AddBuffSentence
   | RemoveBuffSentence
@@ -422,6 +434,41 @@ export type Sentence =
   | RevealSentence
   | MoveChosenSentence
   | ResultSentence;
+
+/**
+ * `Set mana of this to this.mana.max.` — writes one named gauge's **current** value. The amount is
+ * a number or a formula, read with each character as `this`; the gauge's maximum is `<gauge>.max`.
+ */
+export interface SetSentence {
+  readonly kind: 'set';
+  readonly span: Span;
+  /** The gauge's id, lowercase (`mana`). */
+  readonly gauge: string;
+  readonly amount: MathExpression;
+  readonly amountSpan: Span;
+  readonly chars: CharsPhrase;
+  readonly guard?: IfClause;
+  readonly optional?: boolean;
+  readonly repeat?: RepeatClause;
+  readonly event?: string;
+}
+
+/**
+ * `Increase mana maximum of this by 1.` — raises a named gauge's **maximum**, by a number or a formula
+ * (like `Set`).
+ */
+export interface IncreaseMaxSentence {
+  readonly kind: 'increaseMax';
+  readonly span: Span;
+  readonly gauge: string;
+  readonly amount: MathExpression;
+  readonly amountSpan: Span;
+  readonly chars: CharsPhrase;
+  readonly guard?: IfClause;
+  readonly optional?: boolean;
+  readonly repeat?: RepeatClause;
+  readonly event?: string;
+}
 
 /** `Deal 5 damage to all enemy characters.` */
 export interface DealSentence {
@@ -929,6 +976,8 @@ export type Quantifier =
    * silently ignore every cause it could not act on.
    */
   | 'source'
+  /** `it` — the character a `When a character enters play then …` rule is about. Rule sections only. */
+  | 'it'
   /** `the victim` — one of the ability's named picks. */
   | 'bound';
 /** Relative-to-user adjective on a group. */
@@ -1020,6 +1069,8 @@ export function sentenceStartSpan(sentence: Sentence): Span {
   switch (sentence.kind) {
     case 'deal':
     case 'heal':
+    case 'set':
+    case 'increaseMax':
     case 'destroy':
     case 'addBuff':
     case 'removeBuff':

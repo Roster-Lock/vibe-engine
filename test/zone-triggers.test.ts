@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import { completeAt, compileDocument, emptyDictionary } from '../src/english/index.js';
 import { ZoneDictionary } from '../src/english/zone-dictionary.js';
-import { ACTIVE, CARD_ZONES, STACK } from '../src/games/cards/zones.js';
+import { ACTIVE, CARD_ZONES, STACK } from '../examples/card-game/zones.js';
 import {
   Character,
   Player,
